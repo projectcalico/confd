@@ -1,0 +1,8 @@
+[template]
+src = "bird6_ipam.cfg.template"
+dest = "/config/bird6_ipam.cfg"
+prefix = "/calico/v1/ipam/v6"
+keys = [
+    "/pool",
+]
+reload_cmd = "echo -e 'POST /containers/calico-bird6/kill?signal=HUP HTTP/1.0\r\n' | nc -U /docker.sock"
