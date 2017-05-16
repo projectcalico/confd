@@ -1,0 +1,8 @@
+[template]
+src = "bird_ipam.cfg.template"
+dest = "/config/bird_ipam.cfg"
+prefix = "/calico/v1/ipam/v4"
+keys = [
+    "/pool",
+]
+reload_cmd = "echo -e 'POST /containers/calico-bird/kill?signal=HUP HTTP/1.0\r\n' | nc -U /docker.sock"
