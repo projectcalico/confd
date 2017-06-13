@@ -123,4 +123,4 @@ bin/etcdctl:
 .PHONY: clean
 clean:
 	rm -rf bin/*
-	rm /etc/calico/confd/config/*.cfg
+	rm -f templates/config/*.cfg
