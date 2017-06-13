@@ -66,6 +66,7 @@ test-kdd: bin/confd bin/kubectl bin/bird bin/bird6 run-k8s-apiserver
 	docker run --rm --net=host \
 		-v $(CURDIR)/tests/:/tests/ \
 		-v $(CURDIR)/bin:/calico/bin/ \
+		-v $(CURDIR)/templates/:/etc/calico/confd/ \
 		-e LOCAL_USER_ID=0 \
 		$(GO_BUILD_CONTAINER) /tests/test_kdd.sh
 
@@ -75,6 +76,7 @@ test-etcd: bin/confd bin/etcdctl bin/bird bin/bird6 run-etcd
 	docker run --rm --net=host \
 		-v $(CURDIR)/tests/:/tests/ \
 		-v $(CURDIR)/bin:/calico/bin/ \
+		-v $(CURDIR)/templates/:/etc/calico/confd/ \
 		-e LOCAL_USER_ID=0 \
 		$(GO_BUILD_CONTAINER) /tests/test_etcd.sh
 
@@ -121,3 +123,4 @@ bin/etcdctl:
 .PHONY: clean
 clean:
 	rm -rf bin/*
+	rm /etc/calico/confd/config/*.cfg
