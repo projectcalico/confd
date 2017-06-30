@@ -30,6 +30,7 @@ clean_etcd() {
     echo "Cleaning out etcd"
     etcdctl rm -r /calico
 }
+
 # Populates the k8s API server with mock data
 # $1 would be the tests you want to run e.g. mesh/global
 populate_kdd() {
@@ -59,6 +60,16 @@ clean_kdd() {
     kubectl delete -f /tests/mock_data/kdd/${to_test}/tpr_data.yaml > /dev/null 2>&1
     kubectl delete -f /tests/mock_data/kdd/${to_test}/tprs.yaml > /dev/null 2>&1
     kubectl delete -f /tests/mock_data/kdd/${to_test}/nodes.yaml > /dev/null 2>&1
+}
+
+# get_templates attempts to grab the latest templates from the calico repo
+get_templates() {
+    repo_dir="/node-repo"
+    if [ ! -d ${repo_dir} ]; then
+        echo "Getting latest confd templates from calico repo"
+        git clone https://github.com/projectcalico/calico.git ${repo_dir}
+        ln -s ${repo_dir}/calico_node/filesystem/etc/calico/ /etc/calico
+    fi
 }
 
 create_tomls() {

@@ -13,6 +13,7 @@ export NODENAME="kube-master"
 
 populate_etcd ${TO_TEST}
 
+get_templates
 create_tomls
 
 # Use ETCD_ENDPOINTS in preferences to ETCD_AUTHORITY

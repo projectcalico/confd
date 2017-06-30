@@ -13,6 +13,7 @@ export NODENAME="kube-master"
 
 populate_kdd ${TO_TEST}
 
+get_templates
 create_tomls
 
 echo "Running confd against KDD"
