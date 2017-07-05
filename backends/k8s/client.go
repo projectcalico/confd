@@ -141,7 +141,7 @@ func (c *Client) GetValues(keys []string) (map[string]string, error) {
 			}
 			c.populateFromKVPairs(kvps, vars)
 
-			kvps, _, err = c.globalBgpCfgClient.List(model.GlobalBGPPeerListOptions{})
+			kvps, _, err = c.globalBgpPeerClient.List(model.GlobalBGPPeerListOptions{})
 			if err != nil {
 				return nil, err
 			}
@@ -352,9 +352,9 @@ func (c *Client) populateNodeDetails(kNode *kapiv1.Node, vars map[string]string)
 func (c *Client) populateFromKVPairs(kvps []*model.KVPair, vars map[string]string) {
 	// Create a etcdVarClient to write the KVP results in the vars map, using the
 	// compat adaptor to write the values in etcdv2 format.
-	client := compat.NewAdaptor(etcdVarClient{vars: vars})
+	client := compat.NewAdaptor(&etcdVarClient{vars: vars})
 	for _, kvp := range kvps {
-		client.Create(kvp)
+		client.Apply(kvp)
 	}
 }
 
@@ -395,12 +395,24 @@ func (c *Client) setVersion(name, value string) {
 // etcdVarClient implements the api.Client interface.  It is used to emulate a
 // Calico etcd client and this "fake" client simply stores the values in a local
 // KV map.  The fake client enables us to use the compat module in libcalico-go
-// which handles conversion to the etcdv2 format.
+// which handles conversion to the etcdv2 format.  We only expect the Apply action
+// to be invoked (and possibly delete as the node maps to multiple entries that may
+// be created and deleted based on the node config).
 type etcdVarClient struct {
 	vars map[string]string
 }
 
 func (c *etcdVarClient) Create(kvp *model.KVPair) (*model.KVPair, error) {
+	log.Fatal("Create should not be invoked")
+	return nil, nil
+}
+
+func (c *etcdVarClient) Update(kvp *model.KVPair) (*model.KVPair, error) {
+	log.Fatal("Update should not be invoked")
+	return nil, nil
+}
+
+func (c *etcdVarClient) Apply(kvp *model.KVPair) (*model.KVPair, error) {
 	path, err := model.KeyToDefaultPath(kvp.Key)
 	if err != nil {
 		log.Error("Unable to create path from Key: %s", kvp.Key)
@@ -415,18 +427,8 @@ func (c *etcdVarClient) Create(kvp *model.KVPair) (*model.KVPair, error) {
 	return kvp, nil
 }
 
-func (c *etcdVarClient) Update(object *model.KVPair) (*model.KVPair, error) {
-	log.Fatal("Update should not be invoked")
-	return nil, nil
-}
-
-func (c *etcdVarClient) Apply(object *model.KVPair) (*model.KVPair, error) {
-	log.Fatal("Apply should not be invoked")
-	return nil, nil
-}
-
-func (c *etcdVarClient) Delete(object *model.KVPair) error {
-	log.Fatal("Delete should not be invoked")
+func (c *etcdVarClient) Delete(kvp *model.KVPair) error {
+	log.Debug("Delete ignored")
 	return nil
 }
 
