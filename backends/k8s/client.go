@@ -3,22 +3,25 @@ package k8s
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kelseyhightower/confd/log"
+	backendapi "github.com/projectcalico/libcalico-go/lib/backend/api"
+	"github.com/projectcalico/libcalico-go/lib/backend/compat"
 	"github.com/projectcalico/libcalico-go/lib/backend/k8s/resources"
 	"github.com/projectcalico/libcalico-go/lib/backend/k8s/thirdparty"
 	"github.com/projectcalico/libcalico-go/lib/backend/model"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	clientapi "k8s.io/client-go/pkg/api"
-	kerrors "k8s.io/client-go/pkg/api/errors"
 	kapiv1 "k8s.io/client-go/pkg/api/v1"
-	metav1 "k8s.io/client-go/pkg/apis/meta/v1"
-	"k8s.io/client-go/pkg/runtime"
-	"k8s.io/client-go/pkg/runtime/schema"
-	"k8s.io/client-go/pkg/runtime/serializer"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -26,6 +29,7 @@ import (
 const (
 	ipPool         = "/calico/v1/ipam/v4/pool"
 	global         = "/calico/bgp/v1/global"
+	globalPeer     = "/calico/bgp/v1/global/peer_v4"
 	globalASN      = "/calico/bgp/v1/global/as_num"
 	globalNodeMesh = "/calico/bgp/v1/global/node_mesh"
 	allNodes       = "/calico/bgp/v1/host"
@@ -38,8 +42,16 @@ var (
 )
 
 type Client struct {
-	clientSet *kubernetes.Clientset
-	tprClient *rest.RESTClient
+	clientSet        *kubernetes.Clientset
+	tprClient        *rest.RESTClient
+	resourceVersions map[string]string
+	sync.RWMutex
+
+	ipPoolClient        resources.K8sResourceClient
+	globalBgpPeerClient resources.K8sResourceClient
+	globalBgpCfgClient  resources.K8sResourceClient
+	nodeBgpPeerClient   resources.K8sResourceClient
+	nodeBgpCfgClient    resources.K8sResourceClient
 }
 
 func NewK8sClient(kubeconfig string) (*Client, error) {
@@ -73,9 +85,15 @@ func NewK8sClient(kubeconfig string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	kubeClient := &Client{
-		clientSet: cs,
-		tprClient: tprClient,
+		clientSet:           cs,
+		tprClient:           tprClient,
+		ipPoolClient:        resources.NewIPPoolClient(cs, tprClient),
+		globalBgpPeerClient: resources.NewGlobalBGPPeerClient(cs, tprClient),
+		globalBgpCfgClient:  resources.NewGlobalBGPConfigClient(cs, tprClient),
+		nodeBgpPeerClient:   resources.NewNodeBGPPeerClient(cs),
+		nodeBgpCfgClient:    resources.NewNodeBGPConfigClient(cs),
 	}
 
 	return kubeClient, nil
@@ -83,7 +101,7 @@ func NewK8sClient(kubeconfig string) (*Client, error) {
 
 // GetValues takes the etcd like keys and route it to the appropriate k8s API endpoint.
 func (c *Client) GetValues(keys []string) (map[string]string, error) {
-	var kvps = make(map[string]string)
+	var vars = make(map[string]string)
 	for _, key := range keys {
 		log.Debug(fmt.Sprintf("Getting key %s", key))
 		if m := singleNode.FindStringSubmatch(key); m != nil {
@@ -92,7 +110,7 @@ func (c *Client) GetValues(keys []string) (map[string]string, error) {
 			if err != nil {
 				return nil, err
 			}
-			err = populateNodeDetails(kNode, kvps)
+			err = c.populateNodeDetails(kNode, vars)
 			if err != nil {
 				return nil, err
 			}
@@ -106,143 +124,158 @@ func (c *Client) GetValues(keys []string) (map[string]string, error) {
 			cidr := kNode.Spec.PodCIDR
 			parts := strings.Split(cidr, "/")
 			cidr = strings.Join(parts, "-")
-			kvps[key+"/"+cidr] = "{}"
+			vars[key+"/"+cidr] = "{}"
 		}
+
 		switch key {
 		case global:
-			// Default to "info" until this makes it into k8s.
-			kvps[globalLogging] = "info"
-			// Default to 64512
-			kvps[globalASN] = "64512"
-			// Default to true until peering info is available in k8s.
-			kvps[globalNodeMesh] = `{"enabled": true}`
+			// Set default values for fields that we always expect to have.
+			vars[globalLogging] = "info"
+			vars[globalASN] = "64512"
+			vars[globalNodeMesh] = `{"enabled": true}`
+
+			// Global data consists of both global config and global peers.
+			kvps, _, err := c.globalBgpCfgClient.List(model.GlobalBGPConfigListOptions{})
+			if err != nil {
+				return nil, err
+			}
+			c.populateFromKVPairs(kvps, vars)
+
+			kvps, _, err = c.globalBgpPeerClient.List(model.GlobalBGPPeerListOptions{})
+			if err != nil {
+				return nil, err
+			}
+			c.populateFromKVPairs(kvps, vars)
 		case globalNodeMesh:
 			// This is needed as there are calls to 'global' and directly to 'global/node_mesh'
-			// Default to true until peering configuration is available in k8s.
-			kvps[globalNodeMesh] = `{"enabled": true}`
-		case ipPool:
-			tprs := thirdparty.IpPoolList{}
-			err := c.tprClient.Get().
-				Resource("ippools").
-				Namespace("kube-system").
-				Do().Into(&tprs)
+			// Default to true, but we may override this if a value is configured.
+			vars[globalNodeMesh] = `{"enabled": true}`
 
-			// Ignore not found errors, as this simply means ippools does
-			// not exist.
+			// Get the configured value.
+			kvps, _, err := c.globalBgpCfgClient.List(model.GlobalBGPConfigListOptions{Name: "NodeMeshEnabled"})
 			if err != nil {
-				if !kerrors.IsNotFound(err) {
-					return nil, err
-				}
+				return nil, err
 			}
-
-			for _, tpr := range tprs.Items {
-				kvp := resources.ThirdPartyToIPPool(&tpr)
-				cidr := kvp.Key.(model.IPPoolKey).CIDR
-
-				if cidr.Version() == 4 {
-					kvps[ipPool+"/"+tpr.Metadata.Name] = tpr.Spec.Value
-				}
+			c.populateFromKVPairs(kvps, vars)
+		case ipPool:
+			kvps, _, err := c.ipPoolClient.List(model.IPPoolListOptions{})
+			if err != nil {
+				return nil, err
 			}
+			c.populateFromKVPairs(kvps, vars)
 		case allNodes:
-			nodes, err := c.clientSet.Nodes().List(kapiv1.ListOptions{})
+			nodes, err := c.clientSet.Nodes().List(metav1.ListOptions{})
 			if err != nil {
 				return nil, err
 			}
 
 			for _, kNode := range nodes.Items {
-				err := populateNodeDetails(&kNode, kvps)
+				err := c.populateNodeDetails(&kNode, vars)
 				if err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
-	log.Debug(fmt.Sprintf("%v", kvps))
-	return kvps, nil
+	log.Debug(fmt.Sprintf("%v", vars))
+	return vars, nil
 }
 
 func (c *Client) WatchPrefix(prefix string, keys []string, waitIndex uint64, stopChan chan bool) (uint64, error) {
 
+	// Kubernetes uses a string resource version, so rather than converting to a uint64, just store
+	// in our private data the current revision for each prefix.  We'll use a wait index of 0 to
+	// indicate a List is required, and a value of 1 to indicate a Watch is required.
+
 	if waitIndex == 0 {
 		switch prefix {
 		case global:
-			// We only have defaults for this, and they won't change in the
-			// API at this time, so we can safely assume we won't be refreshing.
-			time.Sleep(10 * time.Second)
-			return waitIndex, nil
-		case globalNodeMesh:
-			// This is currently not changeable in k8s.
-			time.Sleep(10 * time.Second)
-			return waitIndex, nil
-		case allNodes:
-			// Get all nodes.  The k8s client does not expose a way to watch a single Node.
-			nodes, err := c.clientSet.Nodes().List(kapiv1.ListOptions{})
+			// Global path consists of both BGP config and BGP Peers.
+			_, ver, err := c.globalBgpCfgClient.List(model.GlobalBGPConfigListOptions{})
 			if err != nil {
 				return 0, err
 			}
-			ver := nodes.ListMeta.ResourceVersion
+			c.setVersion(global, ver)
 
-			return convertResourceVersionToUint(ver, prefix)
-		case ipPool:
-			tprs := thirdparty.IpPoolList{}
-			err := c.tprClient.Get().
-				Name("ippool").
-				Namespace("kube-system").
-				Do().Into(&tprs)
+			// Global path consists of both BGP config and BGP Peers.
+			_, ver, err = c.globalBgpPeerClient.List(model.GlobalBGPPeerListOptions{})
 			if err != nil {
-				if !kerrors.IsNotFound(err) {
-					return 0, err
-				}
+				return 0, err
 			}
+			c.setVersion(globalPeer, ver)
 
-			ver := tprs.Metadata.ResourceVersion
-			return convertResourceVersionToUint(ver, prefix)
+			return 1, nil
+		case globalNodeMesh:
+			// Global node mesh is a specific bgp config option, but we can only watch on all
+			// global BGP config.
+			_, ver, err := c.globalBgpCfgClient.List(model.GlobalBGPConfigListOptions{})
+			if err != nil {
+				return 0, err
+			}
+			c.setVersion(globalNodeMesh, ver)
+			return 1, nil
+		case allNodes:
+			// Get all nodes.  The k8s client does not expose a way to watch a single Node.
+			nodes, err := c.clientSet.Nodes().List(metav1.ListOptions{})
+			if err != nil {
+				return 0, err
+			}
+			c.setVersion(allNodes, nodes.ListMeta.ResourceVersion)
+			return 1, nil
+		case ipPool:
+			// Global node mesh is a specific bgp config option, but we can only watch on all
+			// global BGP config.
+			_, ver, err := c.ipPoolClient.List(model.IPPoolListOptions{})
+			if err != nil {
+				return 0, err
+			}
+			c.setVersion(ipPool, ver)
+			return 1, nil
 		default:
-			// We aren't tracking this key, default to 10 second refresh.
+			// We aren't tracking this key, default to 60 second refresh.
 			time.Sleep(60 * time.Second)
 			log.Debug(fmt.Sprintf("Receieved unknown key: %v", prefix))
-			return waitIndex + 1, nil
+			return 0, nil
 		}
 	}
 
 	switch prefix {
 	case global:
-		// These are currently not changeable in k8s.
+		// TODO  Need to watch global config AND global peers
 		time.Sleep(10 * time.Second)
 		return waitIndex, nil
 	case globalNodeMesh:
-		// This is currently not changeable in k8s.
-		time.Sleep(10 * time.Second)
-		return waitIndex, nil
-	case allNodes:
-		w, err := c.clientSet.Nodes().Watch(kapiv1.ListOptions{})
+		ver, err := c.waitForK8sResource(c.getVersion(globalNodeMesh), c.globalBgpCfgClient)
 		if err != nil {
-			return waitIndex, err
+			return 0, err
+		}
+		c.setVersion(allNodes, ver)
+		return 1, nil
+	case ipPool:
+		ver, err := c.waitForK8sResource(c.getVersion(ipPool), c.globalBgpCfgClient)
+		if err != nil {
+			return 0, err
+		}
+		c.setVersion(ipPool, ver)
+		return 1, nil
+	case allNodes:
+		w, err := c.clientSet.Nodes().Watch(metav1.ListOptions{
+			ResourceVersion: c.getVersion(allNodes),
+		})
+		if err != nil {
+			return 0, err
 		}
 		event := <-w.ResultChan()
 		ver := event.Object.(*kapiv1.NodeList).ListMeta.ResourceVersion
 		w.Stop()
-		log.Debug(fmt.Sprintf("%d : %s", waitIndex, ver))
-
-		return convertResourceVersionToUint(ver, prefix)
-	case ipPool:
-		w, err := c.tprClient.Get().
-			Name("ippool").
-			Namespace("kube-system").
-			Watch()
-		if err != nil {
-			return waitIndex, err
-		}
-		event := <-w.ResultChan()
-		ver := event.Object.(*thirdparty.IpPoolList).Metadata.ResourceVersion
-		w.Stop()
-
-		return convertResourceVersionToUint(ver, prefix)
+		log.Debug(fmt.Sprintf("All nodes resource version: %s", ver))
+		c.setVersion(allNodes, ver)
+		return 1, nil
 	default:
-		// We aren't tracking this key, default to 10 second refresh.
+		// We aren't tracking this key, default to 60 second refresh.
 		time.Sleep(60 * time.Second)
 		log.Debug(fmt.Sprintf("Receieved unknown key: %v", prefix))
-		return waitIndex + 1, nil
+		return 1, nil
 	}
 	return waitIndex, nil
 }
@@ -273,8 +306,8 @@ func buildTPRClient(baseConfig *rest.Config) (*rest.RESTClient, error) {
 				&thirdparty.GlobalConfigList{},
 				&thirdparty.IpPool{},
 				&thirdparty.IpPoolList{},
-				&kapiv1.ListOptions{},
-				&kapiv1.DeleteOptions{},
+				&thirdparty.GlobalBgpPeer{},
+				&thirdparty.GlobalBgpPeerList{},
 			)
 			return nil
 		})
@@ -284,34 +317,142 @@ func buildTPRClient(baseConfig *rest.Config) (*rest.RESTClient, error) {
 }
 
 // populateNodeDetails populates the given kvps map with values we track from the k8s Node object.
-func populateNodeDetails(kNode *kapiv1.Node, kvps map[string]string) error {
+func (c *Client) populateNodeDetails(kNode *kapiv1.Node, vars map[string]string) error {
+	kvps := []*model.KVPair{}
+
+	// Start with the main Node configuration
 	cNode, err := resources.K8sNodeToCalico(kNode)
 	if err != nil {
 		log.Error("Failed to parse k8s Node into Calico Node")
 		return err
 	}
-	node := cNode.Value.(*model.Node)
-	nodeKey := allNodes + "/" + kNode.Name
+	kvps = append(kvps, cNode)
 
-	if node.FelixIPv4 != nil {
-		kvps[nodeKey+"/ip_addr_v4"] = node.FelixIPv4.String()
-	}
-	if node.BGPIPv4Net != nil {
-		kvps[nodeKey+"/network_v4"] = node.BGPIPv4Net.String()
+	// Add per-node BGP config (each of the per-node resource clients also implements
+	// the CustomK8sNodeResourceList interface, used to extract per-node resources from
+	// the Node resource.
+	if cfg, err := c.nodeBgpCfgClient.(resources.CustomK8sNodeResourceList).ExtractResourcesFromNode(kNode); err != nil {
+		log.Error("Failed to parse BGP configs from node resource - skip config data")
+	} else {
+		kvps = append(kvps, cfg...)
 	}
 
-	// Some empty defaults for ipv6
-	kvps[nodeKey+"/ip_addr_v6"] = ""
+	if peers, err := c.nodeBgpPeerClient.(resources.CustomK8sNodeResourceList).ExtractResourcesFromNode(kNode); err != nil {
+		log.Error("Failed to parse BGP peers from node resource - skip config data")
+	} else {
+		kvps = append(kvps, peers...)
+	}
+
+	// Populate the vars map from the KVPairs.
+	c.populateFromKVPairs(kvps, vars)
 
 	return nil
 }
 
-// convertResourceVersionToUint converts the k8s string resource version to a uint64 expected by confd.
-func convertResourceVersionToUint(rv string, prefix string) (uint64, error) {
-	i, err := strconv.ParseUint(rv, 10, 64)
-	if err != nil {
-		log.Error(fmt.Sprintf("Could not convert '%s' resource version %s to uint64", prefix, rv))
-		return 0, err
+func (c *Client) populateFromKVPairs(kvps []*model.KVPair, vars map[string]string) {
+	// Create a etcdVarClient to write the KVP results in the vars map, using the
+	// compat adaptor to write the values in etcdv2 format.
+	client := compat.NewAdaptor(&etcdVarClient{vars: vars})
+	for _, kvp := range kvps {
+		client.Apply(kvp)
 	}
-	return i, nil
+}
+
+func (c *Client) waitForK8sResource(resourceVersion string, client resources.K8sResourceClient) (string, error) {
+	// All of the Calico custom resource type clients implement the K8sResourceWatcher
+	// interface, so use that to create a Kubernetes Watch.
+	watcher := client.(resources.K8sResourceWatcher)
+	w, err := watcher.Watch(resourceVersion)
+	if err != nil {
+		return "", err
+	}
+	event := <-w.ResultChan()
+	if event.Type == watch.Error {
+		w.Stop()
+		return "", fmt.Errorf("Error watching resource")
+	}
+
+	// Extract the resource version from the event object (all Calico custom resource types
+	// implement the ObjectMetaAccessor interface).
+	ver := event.Object.(metav1.ObjectMetaAccessor).GetObjectMeta().GetResourceVersion()
+	w.Stop()
+	log.Debug(fmt.Sprintf("Resource version: %s", ver))
+	return ver, nil
+}
+
+func (c *Client) getVersion(name string) string {
+	c.Lock()
+	defer c.Unlock()
+	return c.resourceVersions[name]
+}
+
+func (c *Client) setVersion(name, value string) {
+	c.Lock()
+	defer c.Unlock()
+	c.resourceVersions[name] = value
+}
+
+// etcdVarClient implements the api.Client interface.  It is used to emulate a
+// Calico etcd client and this "fake" client simply stores the values in a local
+// KV map.  The fake client enables us to use the compat module in libcalico-go
+// which handles conversion to the etcdv2 format.  We only expect the Apply action
+// to be invoked (and possibly delete as the node maps to multiple entries that may
+// be created and deleted based on the node config).
+type etcdVarClient struct {
+	vars map[string]string
+}
+
+func (c *etcdVarClient) Create(kvp *model.KVPair) (*model.KVPair, error) {
+	log.Fatal("Create should not be invoked")
+	return nil, nil
+}
+
+func (c *etcdVarClient) Update(kvp *model.KVPair) (*model.KVPair, error) {
+	log.Fatal("Update should not be invoked")
+	return nil, nil
+}
+
+func (c *etcdVarClient) Apply(kvp *model.KVPair) (*model.KVPair, error) {
+	path, err := model.KeyToDefaultPath(kvp.Key)
+	if err != nil {
+		log.Error("Unable to create path from Key: %s", kvp.Key)
+		return nil, err
+	}
+	value, err := model.SerializeValue(kvp)
+	if err != nil {
+		log.Error("Unable to serialize value: %s", kvp.Key)
+		return nil, err
+	}
+	c.vars[path] = string(value)
+	return kvp, nil
+}
+
+func (c *etcdVarClient) Delete(kvp *model.KVPair) error {
+	log.Debug("Delete ignored")
+	return nil
+}
+
+func (c *etcdVarClient) Get(key model.Key) (*model.KVPair, error) {
+	log.Fatal("Get should not be invoked")
+	return nil, nil
+}
+
+func (c *etcdVarClient) List(list model.ListInterface) ([]*model.KVPair, error) {
+	log.Fatal("List should not be invoked")
+	return nil, nil
+}
+
+func (c *etcdVarClient) Syncer(callbacks backendapi.SyncerCallbacks) backendapi.Syncer {
+	log.Fatal("Syncer should not be invoked")
+	return nil
+}
+
+func (c *etcdVarClient) EnsureInitialized() error {
+	log.Fatal("EnsureIntialized should not be invoked")
+	return nil
+}
+
+func (c *etcdVarClient) EnsureCalicoNodeInitialized(node string) error {
+	log.Fatal("EnsureNodeInitialized should not be invoked")
+	return nil
 }
