@@ -3,24 +3,27 @@ package k8s
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kelseyhightower/confd/log"
 	"github.com/projectcalico/libcalico-go/lib/backend/k8s/resources"
 	"github.com/projectcalico/libcalico-go/lib/backend/k8s/thirdparty"
 	"github.com/projectcalico/libcalico-go/lib/backend/model"
+
 	"k8s.io/client-go/kubernetes"
 	clientapi "k8s.io/client-go/pkg/api"
-	kerrors "k8s.io/client-go/pkg/api/errors"
 	kapiv1 "k8s.io/client-go/pkg/api/v1"
-	metav1 "k8s.io/client-go/pkg/apis/meta/v1"
-	"k8s.io/client-go/pkg/runtime"
-	"k8s.io/client-go/pkg/runtime/schema"
-	"k8s.io/client-go/pkg/runtime/serializer"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/cache"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 )
 
 const (
@@ -38,8 +41,12 @@ var (
 )
 
 type Client struct {
-	clientSet *kubernetes.Clientset
-	tprClient *rest.RESTClient
+	clientSet              *kubernetes.Clientset
+	tprClient              *rest.RESTClient
+	ipPoolConverter        resources.IPPoolConverter
+	globalBgpPeerConverter resources.GlobalBGPPeerConverter
+	resourceVersions       map[string]string
+	sync.RWMutex
 }
 
 func NewK8sClient(kubeconfig string) (*Client, error) {
@@ -79,6 +86,18 @@ func NewK8sClient(kubeconfig string) (*Client, error) {
 	}
 
 	return kubeClient, nil
+}
+
+func (c *Client) getVersion(name string) string {
+	c.Lock()
+	defer c.Unlock()
+	return c.resourceVersions[name]
+}
+
+func (c *Client) setVersion(name, value string) {
+	c.Lock()
+	defer c.Unlock()
+	c.resourceVersions[name] = value
 }
 
 // GetValues takes the etcd like keys and route it to the appropriate k8s API endpoint.
@@ -136,15 +155,19 @@ func (c *Client) GetValues(keys []string) (map[string]string, error) {
 			}
 
 			for _, tpr := range tprs.Items {
-				kvp := resources.ThirdPartyToIPPool(&tpr)
-				cidr := kvp.Key.(model.IPPoolKey).CIDR
+				kvp, err := c.ipPoolConverter.ToKVPair(&tpr)
+				if err != nil {
+					log.Error("Skipping invalid pool: %v", tpr)
+					continue
+				}
 
+				cidr := kvp.Key.(model.IPPoolKey).CIDR
 				if cidr.Version() == 4 {
 					kvps[ipPool+"/"+tpr.Metadata.Name] = tpr.Spec.Value
 				}
 			}
 		case allNodes:
-			nodes, err := c.clientSet.Nodes().List(kapiv1.ListOptions{})
+			nodes, err := c.clientSet.Nodes().List(metav1.ListOptions{})
 			if err != nil {
 				return nil, err
 			}
@@ -163,30 +186,42 @@ func (c *Client) GetValues(keys []string) (map[string]string, error) {
 
 func (c *Client) WatchPrefix(prefix string, keys []string, waitIndex uint64, stopChan chan bool) (uint64, error) {
 
+	// Kubernetes uses a string resource version, so rather than converting to a uint64, just store
+	// in our private data the current revision for each prefix.  We'll use a wait index of 0 to
+	// indicate a List is required, and a value of 1 to indicate a Watch is required.
+
 	if waitIndex == 0 {
 		switch prefix {
 		case global:
-			// We only have defaults for this, and they won't change in the
-			// API at this time, so we can safely assume we won't be refreshing.
-			time.Sleep(10 * time.Second)
-			return waitIndex, nil
-		case globalNodeMesh:
-			// This is currently not changeable in k8s.
-			time.Sleep(10 * time.Second)
-			return waitIndex, nil
-		case allNodes:
-			// Get all nodes.  The k8s client does not expose a way to watch a single Node.
-			nodes, err := c.clientSet.Nodes().List(kapiv1.ListOptions{})
-			if err != nil {
-				return 0, err
-			}
-			ver := nodes.ListMeta.ResourceVersion
-
-			return convertResourceVersionToUint(ver, prefix)
-		case ipPool:
-			tprs := thirdparty.IpPoolList{}
+			// Global path consists of both BGP config and BGP Peers.
+			cfgs := thirdparty.GlobalBgpConfigList{}
 			err := c.tprClient.Get().
-				Name("ippool").
+				Resource(resources.GlobalBgpConfigResourceName).
+				Namespace("kube-system").
+				Do().Into(&cfgs)
+			if err != nil {
+				if !kerrors.IsNotFound(err) {
+					return 0, err
+				}
+			}
+			c.setVersion(global + ":cfg", cfgs.Metadata.ResourceVersion)
+
+			peers := thirdparty.GlobalBgpPeerList{}
+			err = c.tprClient.Get().
+				Resource(resources.GlobalBGPPeerResourceName).
+				Namespace("kube-system").
+				Do().Into(&peers)
+			if err != nil {
+				if !kerrors.IsNotFound(err) {
+					return 0, err
+				}
+			}
+			c.setVersion(global + ":peers", peers.Metadata.ResourceVersion)
+			return 1, nil
+		case globalNodeMesh:
+			tprs := thirdparty.GlobalBgpConfigList{}
+			err := c.tprClient.Get().
+				Resource(resources.GlobalBgpConfigResourceName).
 				Namespace("kube-system").
 				Do().Into(&tprs)
 			if err != nil {
@@ -194,55 +229,81 @@ func (c *Client) WatchPrefix(prefix string, keys []string, waitIndex uint64, sto
 					return 0, err
 				}
 			}
-
-			ver := tprs.Metadata.ResourceVersion
-			return convertResourceVersionToUint(ver, prefix)
+			c.setVersion(globalNodeMesh, tprs.Metadata.ResourceVersion)
+			return 1, nil
+		case allNodes:
+			// Get all nodes.  The k8s client does not expose a way to watch a single Node.
+			nodes, err := c.clientSet.Nodes().List(metav1.ListOptions{})
+			if err != nil {
+				return 0, err
+			}
+			c.setVersion(allNodes, nodes.ListMeta.ResourceVersion)
+			return 1, nil
+		case ipPool:
+			tprs := thirdparty.IpPoolList{}
+			err := c.tprClient.Get().
+				Resource(resources.IPPoolResourceName).
+				Namespace("kube-system").
+				Do().Into(&tprs)
+			if err != nil {
+				if !kerrors.IsNotFound(err) {
+					return 0, err
+				}
+			}
+			c.setVersion(ipPool, tprs.Metadata.ResourceVersion)
+			return 1, nil
 		default:
-			// We aren't tracking this key, default to 10 second refresh.
+			// We aren't tracking this key, default to 60 second refresh.
 			time.Sleep(60 * time.Second)
 			log.Debug(fmt.Sprintf("Receieved unknown key: %v", prefix))
-			return waitIndex + 1, nil
+			return 0, nil
 		}
 	}
 
 	switch prefix {
 	case global:
-		// These are currently not changeable in k8s.
+		// TODO  Need to watch global config AND global peers
 		time.Sleep(10 * time.Second)
 		return waitIndex, nil
 	case globalNodeMesh:
-		// This is currently not changeable in k8s.
 		time.Sleep(10 * time.Second)
 		return waitIndex, nil
 	case allNodes:
-		w, err := c.clientSet.Nodes().Watch(kapiv1.ListOptions{})
+		w, err := c.clientSet.Nodes().Watch(metav1.ListOptions{
+			ResourceVersion: c.getVersion(allNodes),
+		})
 		if err != nil {
-			return waitIndex, err
+			return 0, err
 		}
 		event := <-w.ResultChan()
 		ver := event.Object.(*kapiv1.NodeList).ListMeta.ResourceVersion
 		w.Stop()
-		log.Debug(fmt.Sprintf("%d : %s", waitIndex, ver))
-
-		return convertResourceVersionToUint(ver, prefix)
+		log.Debug(fmt.Sprintf("All nodes resource version: %s", ver))
+		c.setVersion(allNodes, ver)
+		return 1, nil
 	case ipPool:
-		w, err := c.tprClient.Get().
-			Name("ippool").
-			Namespace("kube-system").
-			Watch()
+		lw := cache.NewListWatchFromClient(
+			c.tprClient,
+			resources.IPPoolResourceName,
+			"kube-system",
+			fields.Everything())
+		w, err := lw.WatchFunc(metav1.ListOptions{
+			ResourceVersion: c.getVersion(ipPool),
+		})
 		if err != nil {
-			return waitIndex, err
+			return 0, err
 		}
 		event := <-w.ResultChan()
 		ver := event.Object.(*thirdparty.IpPoolList).Metadata.ResourceVersion
 		w.Stop()
-
-		return convertResourceVersionToUint(ver, prefix)
+		log.Debug(fmt.Sprintf("All nodes resource version: %s", ver))
+		c.setVersion(ipPool, ver)
+		return 1, nil
 	default:
-		// We aren't tracking this key, default to 10 second refresh.
+		// We aren't tracking this key, default to 60 second refresh.
 		time.Sleep(60 * time.Second)
 		log.Debug(fmt.Sprintf("Receieved unknown key: %v", prefix))
-		return waitIndex + 1, nil
+		return 1, nil
 	}
 	return waitIndex, nil
 }
@@ -273,8 +334,8 @@ func buildTPRClient(baseConfig *rest.Config) (*rest.RESTClient, error) {
 				&thirdparty.GlobalConfigList{},
 				&thirdparty.IpPool{},
 				&thirdparty.IpPoolList{},
-				&kapiv1.ListOptions{},
-				&kapiv1.DeleteOptions{},
+				&thirdparty.GlobalBgpPeer{},
+				&thirdparty.GlobalBgpPeerList{},
 			)
 			return nil
 		})
@@ -306,12 +367,4 @@ func populateNodeDetails(kNode *kapiv1.Node, kvps map[string]string) error {
 	return nil
 }
 
-// convertResourceVersionToUint converts the k8s string resource version to a uint64 expected by confd.
-func convertResourceVersionToUint(rv string, prefix string) (uint64, error) {
-	i, err := strconv.ParseUint(rv, 10, 64)
-	if err != nil {
-		log.Error(fmt.Sprintf("Could not convert '%s' resource version %s to uint64", prefix, rv))
-		return 0, err
-	}
-	return i, nil
-}
+func watchTPR()
