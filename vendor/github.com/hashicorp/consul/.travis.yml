@@ -1,0 +1,15 @@
+language: go
+
+go:
+  - 1.6
+  - tip
+
+branches:
+  only:
+    - master
+
+install: make
+script:
+  - make test
+
+sudo: false

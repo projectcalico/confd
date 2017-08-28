@@ -1,0 +1,21 @@
+sudo: false
+
+language: go
+
+go:
+  - 1.5.3
+  - tip
+
+matrix:
+  allow_failures:
+    - go: tip
+
+branches:
+  only:
+    - master
+
+install:
+  - go get github.com/tools/godep
+
+script:
+  - make test testrace
