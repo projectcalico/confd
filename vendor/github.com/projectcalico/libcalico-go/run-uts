@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -e
+
+if [ -z $SKIP ]
+then
+    SKIP="vendor"
+else
+    SKIP="vendor,$SKIP"
+fi
+
+# Run tests in random order find tests recursively (-r).
+echo WHAT: $WHAT
+echo SKIP: $SKIP
+ginkgo -cover -r --skipPackage $SKIP $WHAT
+
+echo
+echo '+==============+'
+echo '| All coverage |'
+echo '+==============+'
+echo
+find . -iname '*.coverprofile' | xargs -I _ go tool cover -func=_
+
+echo
+echo '+==================+'
+echo '| Missing coverage |'
+echo '+==================+'
+echo
+find . -iname '*.coverprofile' | xargs -I _ go tool cover -func=_ | grep -v '100.0%'
+
