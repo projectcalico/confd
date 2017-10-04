@@ -1,6 +1,6 @@
 # confd
 
-[![Build Status](https://travis-ci.org/kelseyhightower/confd.svg?branch=master)](https://travis-ci.org/kelseyhightower/confd)
+This is a fork of the [confd](https://github.com/kelseyhightower/confd) project to add Kubernetes support specifically for Calico.
 
 `confd` is a lightweight configuration management tool focused on:
 
@@ -9,21 +9,18 @@
   [vault](https://vaultproject.io), [zookeeper](https://zookeeper.apache.org) or env vars and processing [template resources](docs/template-resources.md).
 * reloading applications to pick up new config file changes
 
-## Community
-
-* IRC: `#confd` on Freenode
-* Mailing list: [Google Groups](https://groups.google.com/forum/#!forum/confd-users)
-* Website: [www.confd.io](http://www.confd.io)
-
 ## Building
 
-Go 1.6 is required to build confd, which uses the new vendor directory.
+To Build confd and run the BIRD template tests:
 
+```shell
+$ make all
 ```
-$ mkdir -p $GOPATH/src/github.com/kelseyhightower
-$ git clone https://github.com/kelseyhightower/confd.git $GOPATH/src/github.com/kelseyhightower/confd
-$ cd $GOPATH/src/github.com/kelseyhightower/confd
-$ ./build
+
+Or to simply build confd:
+
+```shell
+$ make bin/confd
 ```
 
 You should now have confd in your `bin/` directory:
