@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "Script invoked to restart calico confd"
+pkill -9 confd

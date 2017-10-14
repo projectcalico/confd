@@ -6,7 +6,7 @@ ARCH?=amd64
 
 ifeq ($(ARCH),amd64)
 	ARCHTAG?=
-	GO_BUILD_VER?=v0.4
+	GO_BUILD_VER?=latest
 endif
 
 ifeq ($(ARCH),ppc64le)
@@ -88,12 +88,23 @@ test-kdd: bin/confd bin/kubectl bin/bird bin/bird6 run-k8s-apiserver
 
 .PHONY: test-etcd
 ## Run template tests against etcd
-test-etcd: bin/confd bin/etcdctl bin/bird bin/bird6 run-etcd
+test-etcd: bin/confd bin/etcdctl bin/bird bin/bird6 bin/allocate-ipip-addr bin/restart-calico-confd bin/calicoctl run-etcd
 	docker run --rm --net=host \
 		-v $(CURDIR)/tests/:/tests/ \
 		-v $(CURDIR)/bin:/calico/bin/ \
 		-e LOCAL_USER_ID=0 \
 		$(GO_BUILD_CONTAINER) /tests/test_suite_etcd.sh
+
+.PHONY: test-etcd
+## Run template tests against etcd
+run-build: bin/confd bin/etcdctl bin/bird bin/bird6 bin/calicoctl run-etcd
+	docker run --rm --net=host \
+		-v $(CURDIR)/tests/:/tests/ \
+		-v $(CURDIR)/bin:/calico/bin/ \
+		-e LOCAL_USER_ID=0 \
+		-tid \
+		--name calico-build \
+		$(GO_BUILD_CONTAINER) sh
 
 ## Etcd is used by the kubernetes
 run-etcd: stop-etcd
@@ -124,7 +135,6 @@ bin/kubectl:
 	curl -sSf -L --retry 5 https://storage.googleapis.com/kubernetes-release/release/$(K8S_VERSION)/bin/linux/$(ARCH)/kubectl -o $@
 	chmod +x $@
 
-# If bird release is not available bin must be pre-populated with bird and bird6.
 bin/bird:
 	curl -sSf -L --retry 5 https://github.com/projectcalico/bird/releases/download/$(BIRD_VER)/bird -o $@
 	chmod +x $@
@@ -133,8 +143,20 @@ bin/bird6:
 	curl -sSf -L --retry 5 https://github.com/projectcalico/bird/releases/download/$(BIRD_VER)/bird6 -o $@
 	chmod +x $@
 
+bin/restart-calico-confd:
+	cp restart-calico-confd $@
+	chmod +x $@
+
+bin/allocate-ipip-addr:
+	cp fakebinary $@
+	chmod +x $@
+
 bin/etcdctl:
 	curl -sSf -L --retry 5  https://github.com/coreos/etcd/releases/download/$(ETCD_VER)/etcd-$(ETCD_VER)-linux-$(ARCH).tar.gz | tar -xz -C bin --strip-components=1 etcd-$(ETCD_VER)-linux-$(ARCH)/etcdctl 
+
+bin/calicoctl:
+	##curl -sSf -L --retry 5  https://github.com/coreos/etcd/releases/download/$(ETCD_VER)/etcd-$(ETCD_VER)-linux-$(ARCH).tar.gz | tar -xz -C bin --strip-components=1 etcd-$(ETCD_VER)-linux-$(ARCH)/etcdctl
+	echo "no need to download just yet"
 
 .PHONY: clean
 clean:

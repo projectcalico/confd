@@ -13,14 +13,17 @@ type Processor interface {
 }
 
 func Process(config Config) error {
+	// Get the template resources.
 	ts, err := getTemplateResources(config)
 	if err != nil {
 		return err
 	}
-	return process(ts)
-}
 
-func process(ts []*TemplateResource) error {
+	// Configure the client with the set of prefixes.
+	if err := setClientPrefixes(config, ts); err != nil {
+		return err
+	}
+
 	var lastErr error
 	for _, t := range ts {
 		if err := t.process(); err != nil {
@@ -31,34 +34,24 @@ func process(ts []*TemplateResource) error {
 	return lastErr
 }
 
-type intervalProcessor struct {
-	config   Config
-	stopChan chan bool
-	doneChan chan bool
-	errChan  chan error
-	interval int
-}
+// Called to notify the client which prefixes will be monitored.
+func setClientPrefixes(config Config, trs []*TemplateResource) error {
+	prefixes := []string{}
 
-func IntervalProcessor(config Config, stopChan, doneChan chan bool, errChan chan error, interval int) Processor {
-	return &intervalProcessor{config, stopChan, doneChan, errChan, interval}
-}
-
-func (p *intervalProcessor) Process() {
-	defer close(p.doneChan)
-	for {
-		ts, err := getTemplateResources(p.config)
-		if err != nil {
-			log.Fatal(err.Error())
-			break
-		}
-		process(ts)
-		select {
-		case <-p.stopChan:
-			break
-		case <-time.After(time.Duration(p.interval) * time.Second):
-			continue
+	// Loop through the full set of template resources and get a complete set of
+	// unique prefixes that are being watched.
+	pmap := map[string]bool{}
+	for _, tr := range trs {
+		for _, pk := range tr.PrefixedKeys {
+			pmap[pk] = true
 		}
 	}
+	for p, _ := range pmap {
+		prefixes = append(prefixes, p)
+	}
+
+	// Tell the client the set of prefixes.
+	return config.StoreClient.SetPrefixes(prefixes)
 }
 
 type watchProcessor struct {
@@ -76,11 +69,20 @@ func WatchProcessor(config Config, stopChan, doneChan chan bool, errChan chan er
 
 func (p *watchProcessor) Process() {
 	defer close(p.doneChan)
+	// Get the set of template resources.
 	ts, err := getTemplateResources(p.config)
 	if err != nil {
 		log.Fatal(err.Error())
 		return
 	}
+
+	// Configure the client with the set of prefixes.
+	if err := setClientPrefixes(p.config, ts); err != nil {
+		log.Fatal(err.Error())
+		return
+	}
+
+	// Start the individual watchers for each template.
 	for _, t := range ts {
 		t := t
 		p.wg.Add(1)
@@ -91,9 +93,8 @@ func (p *watchProcessor) Process() {
 
 func (p *watchProcessor) monitorPrefix(t *TemplateResource) {
 	defer p.wg.Done()
-	keys := appendPrefix(t.Prefix, t.Keys)
 	for {
-		index, err := t.storeClient.WatchPrefix(t.Prefix, keys, t.lastIndex, p.stopChan)
+		index, err := t.storeClient.WatchPrefix(t.Prefix, t.PrefixedKeys, t.lastIndex, p.stopChan)
 		if err != nil {
 			p.errChan <- err
 			// Prevent backend errors from consuming all resources.

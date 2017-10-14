@@ -48,6 +48,7 @@ type TemplateResource struct {
 	Src           string
 	StageFile     *os.File
 	Uid           int
+	PrefixedKeys  []string
 	funcMap       map[string]interface{}
 	lastIndex     uint64
 	keepStageFile bool
@@ -103,6 +104,9 @@ func NewTemplateResource(path string, config Config) (*TemplateResource, error) 
 	if tr.Gid == -1 {
 		tr.Gid = os.Getegid()
 	}
+
+	// Calculate the set of keys including the prefix.
+	tr.PrefixedKeys = appendPrefix(tr.Prefix, tr.Keys)
 
 	tr.Src = filepath.Join(config.TemplateDir, tr.Src)
 	return &tr, nil
@@ -250,10 +254,10 @@ func (t *TemplateResource) check() error {
 	c := exec.Command("/bin/sh", "-c", cmdBuffer.String())
 	output, err := c.CombinedOutput()
 	if err != nil {
-		log.Error(fmt.Sprintf("%q", string(output)))
+		log.Error(fmt.Sprintf("Error from checkcmd: %q", string(output)))
 		return err
 	}
-	log.Debug(fmt.Sprintf("%q", string(output)))
+	log.Debug(fmt.Sprintf("Output from checkcmd: %q", string(output)))
 	return nil
 }
 
