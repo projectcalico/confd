@@ -2,21 +2,36 @@
 # The build architecture is select by setting the ARCH variable.
 # For example: When building on ppc64le you could use ARCH=ppc64le make <....>.
 # When ARCH is undefined it defaults to amd64.
+HOSTARCH ?= $(shell uname -m)
+GOBUILD_ARCH =
+GO_BUILD_VER?=latest
 ARCH?=amd64
+ALL_ARCH = amd64 arm64 ppc64le s390x
+ARCHTAG =
 
-ifeq ($(ARCH),amd64)
-	ARCHTAG?=
-	GO_BUILD_VER?=latest
+MANIFEST_TOOL_DIR := $(shell mktemp -d)
+export PATH := $(MANIFEST_TOOL_DIR):$(PATH)
+
+MANIFEST_TOOL_VERSION := v0.7.0
+
+space :=
+space +=
+comma := ,
+prefix_linux = $(addprefix linux/,$(strip $1))
+join_platforms = $(subst $(space),$(comma),$(call prefix_linux,$(strip $1)))
+
+ifeq ($(HOSTARCH),aarch64)
+	override GOBUILD_ARCH=-arm64
+endif
+ifeq ($(HOSTARCH),ppc64le)
+	override GOBUILD_ARCH=-ppc64le
+endif
+ifeq ($(HOSTARCH),s390x)
+	override GOBUILD_ARCH=-s390x
 endif
 
-ifeq ($(ARCH),ppc64le)
-	ARCHTAG:=-ppc64le
-	GO_BUILD_VER?=latest
-endif
-
-ifeq ($(ARCH),s390x)
-	ARCHTAG:=-s390x
-	GO_BUILD_VER?=latest
+ifneq ($(ARCH),amd64)
+	override ARCHTAG=-$(ARCH)
 endif
 
 # Select which release branch to test.
@@ -28,7 +43,7 @@ RELEASE_BRANCH?=master
 
 all: clean test
 
-GO_BUILD_CONTAINER?=calico/go-build$(ARCHTAG):$(GO_BUILD_VER)
+GO_BUILD_CONTAINER?=calico/go-build$(GOBUILD_ARCH):$(GO_BUILD_VER)
 
 CALICOCTL_VER=master
 CALICOCTL_CONTAINER_NAME=calico/ctl$(ARCHTAG):$(CALICOCTL_VER)
@@ -78,14 +93,31 @@ vendor vendor/.up-to-date: glide.lock
 	$(DOCKER_GO_BUILD) glide install --strip-vendor
 	touch vendor/.up-to-date
 
-container: bin/confd
-	docker build -t calico/confd$(ARCHTAG) -f Dockerfile$(ARCHTAG) .
+.PHONY: all-container
+all-container: $(addprefix sub-container-,$(ALL_ARCH))
+sub-container-%:
+	$(MAKE) bin/confd ARCH=$*
+	$(MAKE) build-confd-container ARCH=$*
 
+.PHONY: build-confd-container
+build-confd-container:
+	docker build -t calico/confd-$(ARCH) -f Dockerfile.$(ARCH) .
+
+.PHONY: container
+container: sub-container-$(ARCH)
+
+.PHONY: build
+build: bin/confd
+
+.PHONY: image
+image: container
+
+.PHONY: bin/confd
 bin/confd: $(GO_FILES) vendor/.up-to-date
 	@echo Building confd...
 	$(DOCKER_GO_BUILD) \
-	    sh -c 'go build -v -i -o $@ $(LDFLAGS) "github.com/kelseyhightower/confd" && \
-		( ldd bin/confd 2>&1 | grep -q -e "Not a valid dynamic program" \
+	    sh -c 'GOARCH=$(ARCH) go build -v -i -o $@$(ARCHTAG) $(LDFLAGS) "github.com/kelseyhightower/confd" && \
+		( ldd bin/confd$(ARCHTAG) 2>&1 | grep -q -e "Not a valid dynamic program" \
 			-e "not a dynamic executable" || \
 	             ( echo "Error: bin/confd was not statically linked"; false ) )'
 
@@ -182,6 +214,41 @@ bin/calicoctl:
 	  touch $@
 	-docker rm -f calico-ctl
 
+all-tag-images: $(addprefix tag-images-,$(ALL_ARCH))
+tag-images-%:
+	docker tag calico/confd-$* calico/confd-$*:$(VERSION)
+	docker tag calico/confd-$* quay.io/calico/confd-$*:$(VERSION)
+	docker tag calico/confd-$* quay.io/calico/confd-$*:latest
+	@if [ "$*" = amd64 ]; then \
+		docker tag calico/confd-$* quay.io/calico/confd:$(VERSION);\
+		docker tag calico/confd-$* quay.io/calico/confd:latest;\
+	fi
+
+push-all: $(addprefix .push-all-,$(ALL_ARCH))
+.push-all-%:
+	docker push calico/confd-$*:$(VERSION)
+	docker push quay.io/calico/confd-$*:$(VERSION)
+	@if [ "$*" = amd64 ]; then \
+		docker push quay.io/calico/confd:$(VERSION);\
+	fi
+
+push-all-latest: $(addprefix .push-all-latest-,$(ALL_ARCH))
+.push-all-latest-%:
+	docker push calico/confd-$*:latest
+	@if [ "$*" = amd64 ]; then \
+		docker push quay.io/calico/confd:latest;\
+	endif
+
+manifest-tool:
+	curl -sSL https://github.com/estesp/manifest-tool/releases/download/$(MANIFEST_TOOL_VERSION)/manifest-tool-linux-$(ARCH) > $(MANIFEST_TOOL_DIR)/manifest-tool
+	chmod +x $(MANIFEST_TOOL_DIR)/manifest-tool
+
+push-manifest: manifest-tool
+ifndef VERSION
+	$(error VERSION is undefined - run using make push-manifest VERSION=vX.Y.Z)
+endif
+	manifest-tool push from-args --platforms $(call join_platforms,$(ALL_ARCH)) --template calico/confd-ARCH:$(VERSION) --target calico/confd:$(VERSION)
+
 release: clean
 ifndef VERSION
 	$(error VERSION is undefined - run using make release VERSION=vX.Y.Z)
@@ -193,7 +260,7 @@ endif
 	then echo current git working tree is "dirty". Make sure you do not have any uncommitted changes ;false; fi
 
 	# Build binary and docker image. 
-	$(MAKE) container 
+	$(MAKE) all-container
 
 	# Check that the version output includes the version specified.
 	# Tests that the "git tag" makes it into the binaries. Main point is to catch "-dirty" builds
@@ -206,9 +273,7 @@ endif
 	fi
 
 	# Retag images with corect version and quay
-	docker tag calico/confd calico/confd:$(VERSION)
-	docker tag calico/confd quay.io/calico/confd:$(VERSION)
-	docker tag calico/confd quay.io/calico/confd:latest
+	$(MAKE) all-tag-images
 
 	# Check that images were created recently and that the IDs of the versioned and latest images match
 	@docker images --format "{{.CreatedAt}}\tID:{{.ID}}\t{{.Repository}}:{{.Tag}}" calico/confd 
@@ -226,14 +291,14 @@ endif
 	@echo ""
 	@echo "# Now push the newly created release images."
 	@echo ""
-	@echo "  docker push calico/confd:$(VERSION)"
-	@echo "  docker push quay.io/calico/confd:$(VERSION)"
+	@echo "  make push-all VERSION=$(VERSION)"
+	@echo "  make push-manifest VERSION=$(VERSION)"
 	@echo ""
 	@echo "# For the final release only, push the latest tag"
 	@echo "# DO NOT PUSH THESE IMAGES FOR RELEASE CANDIDATES OR ALPHA RELEASES" 
 	@echo ""
-	@echo "  docker push calico/confd:latest"
-	@echo "  docker push quay.io/calico/confd:latest"
+	@echo "  make push-all-latest"
+	@echo "  make push-manifest VERSION=latest"
 	@echo ""
 	@echo "See RELEASING.md for detailed instructions."
 
