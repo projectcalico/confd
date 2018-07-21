@@ -2,6 +2,7 @@ package template
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -17,6 +18,11 @@ import (
 	"github.com/kelseyhightower/confd/pkg/backends"
 	"github.com/kelseyhightower/memkv"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/projectcalico/libcalico-go/lib/apiconfig"
+	"github.com/projectcalico/libcalico-go/lib/clientv3"
+	"github.com/projectcalico/libcalico-go/lib/options"
+	"github.com/projectcalico/libcalico-go/lib/selector"
 )
 
 type Config struct {
@@ -59,6 +65,82 @@ type TemplateResource struct {
 
 var ErrEmptySrc = errors.New("empty src template")
 
+// selectsMe takes a selector and returns
+// true if it selects this node.
+func selectsMe(s string) bool {
+	node := os.Getenv("NODENAME")
+	log.Infof("Checking if %s selects node %s", s, node)
+	ps, err := selector.Parse(s)
+	if err != nil {
+		log.Errorf("Failed to parse selector: %v", err)
+		return false
+	}
+	config, err := apiconfig.LoadClientConfig("")
+	if err != nil {
+		log.Errorf("Failed to load Calico client configuration: %v", err)
+		return false
+	}
+
+	cc, err := clientv3.New(*config)
+	if err != nil {
+		log.Errorf("Failed to create main Calico client: %v", err)
+		return false
+	}
+	n, err := cc.Nodes().Get(context.Background(), node, options.GetOptions{})
+	if err != nil {
+		log.Errorf("Failed to create main Calico client: %v", err)
+		return false
+	}
+
+	// Add in a special label which implements node-specific peers.
+	// Each node is labeled with its own name.
+	l := n.Labels
+	if l == nil {
+		l = map[string]string{}
+	}
+	l["projectcalico.org/node"] = node
+	return ps.Evaluate(l)
+}
+
+// returns the nodes that match selector s.
+func matchingNodes(s string) []string {
+	config, err := apiconfig.LoadClientConfig("")
+	if err != nil {
+		log.Errorf("Failed to load Calico client configuration: %v", err)
+		return nil
+	}
+
+	cc, err := clientv3.New(*config)
+	if err != nil {
+		log.Errorf("Failed to create main Calico client: %v", err)
+		return nil
+	}
+
+	// Get nodes.
+	nodes, err := cc.Nodes().List(context.Background(), options.ListOptions{})
+	if err != nil {
+		log.Errorf("Failed to get nodes: %v", err)
+		return nil
+	}
+
+	ps, err := selector.Parse(s)
+	if err != nil {
+		log.Errorf("Failed to parse selector: %v", err)
+		return nil
+	}
+	names := []string{}
+	for _, n := range nodes.Items {
+		// If it matches the selector, add it.
+		if ps.Evaluate(n.Labels) {
+			names = append(names, n.Name)
+		} else {
+			log.Infof("Node %s does not match selector %s", n.Name, s)
+		}
+	}
+
+	return names
+}
+
 // NewTemplateResource creates a TemplateResource.
 func NewTemplateResource(path string, config Config) (*TemplateResource, error) {
 	if config.StoreClient == nil {
@@ -81,6 +163,11 @@ func NewTemplateResource(path string, config Config) (*TemplateResource, error) 
 	tr.storeClient = config.StoreClient
 	tr.funcMap = newFuncMap()
 	tr.store = memkv.New()
+
+	// CD: TODO - hacked in label selection stuff.
+	tr.store.FuncMap["selectsme"] = selectsMe
+	tr.store.FuncMap["matchingnodes"] = matchingNodes
+
 	tr.syncOnly = config.SyncOnly
 	addFuncs(tr.funcMap, tr.store.FuncMap)
 

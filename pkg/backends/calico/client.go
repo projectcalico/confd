@@ -90,7 +90,7 @@ func NewCalicoClient(configfile string, routeReflector bool) (*client, error) {
 		cacheRevision:     1,
 		revisionsByPrefix: make(map[string]uint64),
 		nodeMeshEnabled:   nodeMeshEnabled,
-		routeReflector:    routeReflector,
+		routeReflector:    true, // CD TODO: routeReflector,
 	}
 
 	// Create a conditional that we use to wake up all of the watcher threads when there
@@ -108,7 +108,7 @@ func NewCalicoClient(configfile string, routeReflector bool) (*client, error) {
 	// confd process.
 	nodeName := os.Getenv("NODENAME")
 	c.nodeLogKey = fmt.Sprintf("/calico/bgp/v1/host/%s/loglevel", nodeName)
-	c.syncer = bgpsyncer.New(c.client, c, nodeName, nodeMeshEnabled || routeReflector)
+	c.syncer = bgpsyncer.New(c.client, c, nodeName, true) // CD: TODO nodeMeshEnabled || routeReflector)
 	c.syncer.Start()
 
 	return c, nil
