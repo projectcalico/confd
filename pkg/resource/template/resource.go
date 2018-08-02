@@ -75,7 +75,7 @@ func NewTemplateResource(path string, config Config) (*TemplateResource, error) 
 		return nil, fmt.Errorf("Cannot process template resource %s - %s", path, err.Error())
 	}
 
-	tr := &tc.TemplateResource
+	tr := tc.TemplateResource // nolint: vet
 	tr.keepStageFile = config.KeepStageFile
 	tr.noop = config.Noop
 	tr.storeClient = config.StoreClient
@@ -108,7 +108,7 @@ func NewTemplateResource(path string, config Config) (*TemplateResource, error) 
 	tr.PrefixedKeys = appendPrefix(tr.Prefix, tr.Keys)
 
 	tr.Src = filepath.Join(config.TemplateDir, tr.Src)
-	return tr, nil
+	return &tr, nil
 }
 
 // setVars sets the Vars for template resource.
