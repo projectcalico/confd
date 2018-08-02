@@ -75,7 +75,7 @@ func NewTemplateResource(path string, config Config) (*TemplateResource, error) 
 		return nil, fmt.Errorf("Cannot process template resource %s - %s", path, err.Error())
 	}
 
-	tr := tc.TemplateResource
+	tr := tc.TemplateResource // nolint: vet
 	tr.keepStageFile = config.KeepStageFile
 	tr.noop = config.Noop
 	tr.storeClient = config.StoreClient
