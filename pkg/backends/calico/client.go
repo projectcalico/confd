@@ -108,7 +108,7 @@ func NewCalicoClient(configfile string, routeReflector bool) (*client, error) {
 	// confd process.
 	nodeName := os.Getenv("NODENAME")
 	c.nodeLogKey = fmt.Sprintf("/calico/bgp/v1/host/%s/loglevel", nodeName)
-	c.syncer = bgpsyncer.New(c.client, c, nodeName, nodeMeshEnabled || routeReflector)
+	c.syncer = bgpsyncer.New(c.client, c, nodeName)
 	c.syncer.Start()
 
 	return c, nil
