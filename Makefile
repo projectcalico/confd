@@ -42,8 +42,11 @@ endif
 ###############################################################################
 GO_BUILD_VER?=v0.17
 
-# Select which release branch to test.
-RELEASE_BRANCH?=master
+# Select which branch of the node repo to get BIRD templates from.
+# Default to the same as the current confd branch, as that allows PRs
+# to pass CI when we are working on mutually dependent BIRD config
+# changes in confd and node.
+RELEASE_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
 
 CALICO_BUILD = calico/go-build:$(GO_BUILD_VER)
 
