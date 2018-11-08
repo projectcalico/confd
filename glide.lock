@@ -1,5 +1,5 @@
-hash: 6f9ae9edb7a5c7fa3b5973b5396663ff6233ec8fe543102a7e1f43dae20ccdab
-updated: 2018-05-29T20:29:54.884870123Z
+hash: c3246677bfc98eb248ba80bf04326e3bd649a73b68b583ee613343d476e4929c
+updated: 2018-11-08T14:10:15.308871-08:00
 imports:
 - name: cloud.google.com/go
   version: 3b1ae45394a234c385be014e9a488f2bb6eef821
@@ -18,7 +18,7 @@ imports:
   subpackages:
   - quantile
 - name: github.com/BurntSushi/toml
-  version: a368813c5e648fee92e5f6c30e3944ff9d5e8895
+  version: 3012a1dbe2e4bd1391d42b32f0577cb7bbc7f005
 - name: github.com/coreos/etcd
   version: c23606781f63d09917a1e7abfcefeb337a9608ea
   subpackages:
@@ -101,7 +101,7 @@ imports:
 - name: github.com/imdario/mergo
   version: 6633656539c1639d9d78127b7d47c622b5d7b6dc
 - name: github.com/json-iterator/go
-  version: 36b14963da70d11297d313183d7e6388c8510e1e
+  version: f2b4162afba35581b6d4a50d3b8f34e33c144682
 - name: github.com/juju/ratelimit
   version: 5b9ff866471762aa2ab2dced63c9fb6f53921342
 - name: github.com/kelseyhightower/envconfig
@@ -115,9 +115,13 @@ imports:
   - jlexer
   - jwriter
 - name: github.com/matttproud/golang_protobuf_extensions
-  version: fc2b8d3a73c4867e51861bbdd5ae3c1f0869dd6a
+  version: c12348ce28de40eed0136aa2b644d0ee0650e56c
   subpackages:
   - pbutil
+- name: github.com/modern-go/concurrent
+  version: bacd9c7ef1dd9b15be4a9909b8ac7a4e313eec94
+- name: github.com/modern-go/reflect2
+  version: 05fbef0ca5da472bbf96c9322b84a53edc03c9fd
 - name: github.com/pborman/uuid
   version: ca53cad383cad2479bbba7f7a1a05797ec1386e4
 - name: github.com/peterbourgon/diskv
@@ -131,7 +135,7 @@ imports:
 - name: github.com/projectcalico/go-yaml-wrapper
   version: 598e54215bee41a19677faa4f0c32acd2a87eb56
 - name: github.com/projectcalico/libcalico-go
-  version: b8bcbf5ba3322a78dc9ef63f1e8d902e7012f93d
+  version: 720be4945426e442eedce60005da8becc578125b
   subpackages:
   - lib/apiconfig
   - lib/apis/v1
@@ -167,9 +171,10 @@ imports:
   - lib/validator/v3
   - lib/watch
 - name: github.com/prometheus/client_golang
-  version: 967789050ba94deca04a5e84cce8ad472ce313c1
+  version: abad2d1bd44235a26707c172eab6bca5bf2dbad3
   subpackages:
   - prometheus
+  - prometheus/internal
 - name: github.com/prometheus/client_model
   version: 6f3806018612930941127f2a7c6c453ba2c527d2
   subpackages:
@@ -236,7 +241,7 @@ imports:
   - unicode/norm
   - width
 - name: google.golang.org/appengine
-  version: b1f26356af11148e710935ed1ac8a7f5702c7612
+  version: 4a4468ece617fc8205e99368fa2200e9d1fad421
   subpackages:
   - internal
   - internal/app_identity
@@ -306,7 +311,7 @@ imports:
   - storage/v1
   - storage/v1beta1
 - name: k8s.io/apimachinery
-  version: 40eaf68ee1889b1da1c528b1a075ecfe94e66837
+  version: b593b18191da3eff9afdfd373da5f5e08fe5ac5f
   subpackages:
   - pkg/api/equality
   - pkg/api/errors
