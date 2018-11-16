@@ -31,9 +31,8 @@ import (
 )
 
 const (
-	envStaticRoutes = "CALICO_STATIC_ROUTES"
-	staticRoutesKey = "calico/static-routes"
-	clusterIPStr    = "k8s-cluster-ips"
+	envAdvertiseClusterIPs = "CALICO_ADVERTISE_CLUSTER_IPS"
+	staticRoutesKey        = "calico/static-routes"
 )
 
 // routeGenerator defines the data fields
@@ -101,9 +100,6 @@ func (rg *routeGenerator) Start(routeString string) {
 		if len(cidr) == 0 {
 			// skip empty string
 			continue
-		} else if cidr == clusterIPStr {
-			// handle k8s-cluster-ips
-			isDynamic = true
 		} else {
 			// consider anything else as cidr
 			if _, _, err := net.ParseCIDR(cidr); err != nil {
@@ -129,6 +125,11 @@ func (rg *routeGenerator) Start(routeString string) {
 
 // getServiceForEndpoints retrieves the corresponding svc for the given ep
 func (rg *routeGenerator) getServiceForEndpoints(ep *v1.Endpoints) (*v1.Service, string) {
+	// do nothing if the endpoints have no subsets in it
+	if len(ep.Subsets) == 0 {
+		log.WithField("ep", ep.Name).Debug("getServiceForEndpoints: ep has no subsets, passing...")
+		return nil, ""
+	}
 	// get key
 	key, err := cache.MetaNamespaceKeyFunc(ep)
 	if err != nil {
@@ -149,6 +150,26 @@ func (rg *routeGenerator) getServiceForEndpoints(ep *v1.Endpoints) (*v1.Service,
 
 // getEndpointsForService retrieves the corresponding ep for the given svc
 func (rg *routeGenerator) getEndpointsForService(svc *v1.Service) (*v1.Endpoints, string) {
+	// do nothing if the svc is not
+	if (svc.Spec.Type != v1.ServiceTypeClusterIP) &&
+		(svc.Spec.Type != v1.ServiceTypeNodePort) &&
+		(svc.Spec.Type != v1.ServiceTypeLoadBalancer) {
+		log.WithFields(log.Fields{
+			"svc":  svc.Name,
+			"type": svc.Spec.Type,
+		}).Debug("getEndpointForService: svc is not a valid type, passing...")
+		return nil, ""
+	}
+	// also do nothing if the clusterIP is empty or None
+	if len(svc.Spec.ClusterIP) > 0 &&
+		svc.Spec.ClusterIP != "None" {
+		log.WithFields(log.Fields{
+			"svc":       svc.Name,
+			"clusterIP": svc.Spec.ClusterIP,
+		}).Debug("getEndpointsForService: svc clusterIP is not valid, passing...")
+		return nil, ""
+	}
+
 	// get key
 	key, err := cache.MetaNamespaceKeyFunc(svc)
 	if err != nil {
