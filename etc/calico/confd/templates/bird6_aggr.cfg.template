@@ -6,8 +6,11 @@ protocol static {
   # IP blocks for this host.
 {{- range ls $block_key}}
 {{- $parts := split . "-"}}
+{{- $mask := index $parts 1}}
+{{- if ne $mask "128"}}
 {{- $cidr := join $parts "/"}}
    route {{$cidr}} blackhole;
+{{- end}}
 {{- end}}
 }
 {{else}}# No IP blocks or static routes for this host.{{end}}

@@ -8,8 +8,11 @@ protocol static {
    # IP blocks for this host.
 {{- range ls $block_key}}
 {{- $parts := split . "-"}}
+{{- $mask := index $parts 1}}
+{{- if ne $mask "32"}}
 {{- $cidr := join $parts "/"}}
    route {{$cidr}} blackhole;
+{{- end}}
 {{- end}}
 {{- end}}
 {{- if ls $static_key}}
