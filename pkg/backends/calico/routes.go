@@ -231,7 +231,7 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 
 			// Advertise route if not already advertised
 			if _, ok := advertisedExternalRoutes[route]; !ok {
-				// TODO: advertise external IP route
+				rg.advertiseExternalRoute(key, route)
 			}
 
 		}
@@ -239,7 +239,7 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 		// Withdraw any routes we are advertising that are no longer External IPs
 		for route := range advertisedExternalRoutes {
 			if !contains(externalRoutes, route) {
-				// TODO: withdraw external IP route
+				rg.withdrawExternalRoute(key, route)
 			}
 		}
 
