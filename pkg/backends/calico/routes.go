@@ -195,6 +195,8 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 	// see if any endpoints are on this node and advertise if so
 	// else remove the route if it also already exists
 	rg.Lock()
+	defer rg.Unlock()
+
 	if rg.advertiseThisService(svc, ep) {
 		route := svc.Spec.ClusterIP + "/32"
 		if cur, exists := rg.svcClusterRouteMap[key]; !exists {
@@ -212,7 +214,6 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 		// We were advertising this route, but should no longer do so.
 		rg.withdrawRoute(key, cur)
 	}
-	rg.Unlock()
 }
 
 // advertiseThisService returns true if this service should be advertised on this node,
