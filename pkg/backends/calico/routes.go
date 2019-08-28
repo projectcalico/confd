@@ -321,6 +321,14 @@ func (rg *routeGenerator) unsetRouteForSvc(obj interface{}) {
 	if route, exists := rg.svcClusterRouteMap[key]; exists {
 		rg.withdrawClusterRoute(key, route)
 	}
+
+	// Remove all External IP's
+	if rg.svcExternalRouteMap[key] != nil {
+		for route := range rg.svcExternalRouteMap[key] {
+			rg.withdrawExternalRoute(key, route)
+		}
+	}
+
 }
 
 // advertiseClusterRoute advertises a route for a service ClusterIP and caches it.
