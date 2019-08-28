@@ -46,6 +46,7 @@ type routeGenerator struct {
 	svcInformer, epInformer cache.Controller
 	svcIndexer, epIndexer   cache.Indexer
 	svcClusterRouteMap      map[string]string
+	svcExternalRouteMap     map[string][]string
 	clusterCIDR             string
 }
 
@@ -68,10 +69,11 @@ func NewRouteGenerator(c *client, clusterCIDR string) (rg *routeGenerator, err e
 
 	// initialize empty route generator
 	rg = &routeGenerator{
-		client:             c,
-		nodeName:           nodename,
-		svcClusterRouteMap: make(map[string]string),
-		clusterCIDR:        clusterCIDR,
+		client:              c,
+		nodeName:            nodename,
+		svcClusterRouteMap:  make(map[string]string),
+		svcExternalRouteMap: make(map[string][]string),
+		clusterCIDR:         clusterCIDR,
 	}
 
 	// set up k8s client
