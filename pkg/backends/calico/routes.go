@@ -45,7 +45,7 @@ type routeGenerator struct {
 	nodeName                string
 	svcInformer, epInformer cache.Controller
 	svcIndexer, epIndexer   cache.Indexer
-	svcRouteMap             map[string]string
+	svcClusterRouteMap      map[string]string
 	clusterCIDR             string
 }
 
@@ -68,10 +68,10 @@ func NewRouteGenerator(c *client, clusterCIDR string) (rg *routeGenerator, err e
 
 	// initialize empty route generator
 	rg = &routeGenerator{
-		client:      c,
-		nodeName:    nodename,
-		svcRouteMap: make(map[string]string),
-		clusterCIDR: clusterCIDR,
+		client:             c,
+		nodeName:           nodename,
+		svcClusterRouteMap: make(map[string]string),
+		clusterCIDR:        clusterCIDR,
 	}
 
 	// set up k8s client
@@ -195,7 +195,7 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 	rg.Lock()
 	if rg.advertiseThisService(svc, ep) {
 		route := svc.Spec.ClusterIP + "/32"
-		if cur, exists := rg.svcRouteMap[key]; !exists {
+		if cur, exists := rg.svcClusterRouteMap[key]; !exists {
 			// This is a new route - send it through.
 			rg.advertiseRoute(key, route)
 		} else if route != cur {
@@ -206,7 +206,7 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 			rg.withdrawRoute(key, cur)
 			rg.advertiseRoute(key, route)
 		}
-	} else if cur, exists := rg.svcRouteMap[key]; exists {
+	} else if cur, exists := rg.svcClusterRouteMap[key]; exists {
 		// We were advertising this route, but should no longer do so.
 		rg.withdrawRoute(key, cur)
 	}
@@ -250,7 +250,7 @@ func (rg *routeGenerator) advertiseThisService(svc *v1.Service, ep *v1.Endpoints
 	return false
 }
 
-// unsetRouteForSvc removes the route from the svcRouteMap
+// unsetRouteForSvc removes the route from the svcClusterRouteMap
 // but checks to see if it wasn't already deleted by its sibling resource
 func (rg *routeGenerator) unsetRouteForSvc(obj interface{}) {
 	// generate key
@@ -265,21 +265,21 @@ func (rg *routeGenerator) unsetRouteForSvc(obj interface{}) {
 	defer rg.Unlock()
 
 	// Remove the route if it exists.
-	if route, exists := rg.svcRouteMap[key]; exists {
+	if route, exists := rg.svcClusterRouteMap[key]; exists {
 		rg.withdrawRoute(key, route)
 	}
 }
 
 // advertiseRoute advertises a route and caches it.
 func (rg *routeGenerator) advertiseRoute(key, route string) {
-	rg.svcRouteMap[key] = route
+	rg.svcClusterRouteMap[key] = route
 	rg.client.AddStaticRoutes([]string{route})
 }
 
 // withdrawRoute withdraws a route and removes it from the cache.
 func (rg *routeGenerator) withdrawRoute(key, route string) {
 	rg.client.DeleteStaticRoutes([]string{route})
-	delete(rg.svcRouteMap, key)
+	delete(rg.svcClusterRouteMap, key)
 }
 
 // onSvcAdd is called when a k8s service is created
