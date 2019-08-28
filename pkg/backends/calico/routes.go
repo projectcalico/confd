@@ -335,6 +335,27 @@ func (rg *routeGenerator) withdrawClusterRoute(key, route string) {
 	delete(rg.svcClusterRouteMap, key)
 }
 
+// advertiseExternalRoute advertises a route for a service ExternalIP and
+// caches it.
+func (rg *routeGenerator) advertiseExternalRoute(key, route string) {
+	if rg.svcExternalRouteMap[key] == nil {
+		rg.svcExternalRouteMap[key] = make(map[string]bool)
+	}
+
+	rg.client.AddStaticRoutes([]string{route})
+	rg.svcExternalRouteMap[key][route] = true
+}
+
+// withdrawExternalRoute withdraws a route for a service ExternalIP and
+// removes it from the cache.
+func (rg *routeGenerator) withdrawExternalRoute(key, route string) {
+	rg.client.DeleteStaticRoutes([]string{route})
+
+	if rg.svcExternalRouteMap[key] != nil {
+		delete(rg.svcExternalRouteMap[key], route)
+	}
+}
+
 // onSvcAdd is called when a k8s service is created
 func (rg *routeGenerator) onSvcAdd(obj interface{}) {
 	svc, ok := obj.(*v1.Service)
