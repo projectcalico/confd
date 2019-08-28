@@ -197,7 +197,8 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 	rg.Lock()
 	defer rg.Unlock()
 
-	if rg.advertiseThisService(svc, ep) {
+	advertise := rg.advertiseThisService(svc, ep)
+	if advertise {
 		route := svc.Spec.ClusterIP + "/32"
 		if cur, exists := rg.svcClusterRouteMap[key]; !exists {
 			// This is a new route - send it through.
