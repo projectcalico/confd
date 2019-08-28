@@ -202,18 +202,18 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 		route := svc.Spec.ClusterIP + "/32"
 		if cur, exists := rg.svcClusterRouteMap[key]; !exists {
 			// This is a new route - send it through.
-			rg.advertiseRoute(key, route)
+			rg.advertiseClusterRoute(key, route)
 		} else if route != cur {
 			// The route has changed somehow. Send a delete for the old one
 			// and add the new one. We don't expect to hit this, since cluster IPs
 			// are immutable. But, handle it for good measure.
 			logc.Warn("ClusterIP for service changed, adjusting")
-			rg.withdrawRoute(key, cur)
-			rg.advertiseRoute(key, route)
+			rg.withdrawClusterRoute(key, cur)
+			rg.advertiseClusterRoute(key, route)
 		}
 	} else if cur, exists := rg.svcClusterRouteMap[key]; exists {
 		// We were advertising this route, but should no longer do so.
-		rg.withdrawRoute(key, cur)
+		rg.withdrawClusterRoute(key, cur)
 	}
 }
 
@@ -270,18 +270,18 @@ func (rg *routeGenerator) unsetRouteForSvc(obj interface{}) {
 
 	// Remove the route if it exists.
 	if route, exists := rg.svcClusterRouteMap[key]; exists {
-		rg.withdrawRoute(key, route)
+		rg.withdrawClusterRoute(key, route)
 	}
 }
 
-// advertiseRoute advertises a route and caches it.
-func (rg *routeGenerator) advertiseRoute(key, route string) {
+// advertiseClusterRoute advertises a route for a service ClusterIP and caches it.
+func (rg *routeGenerator) advertiseClusterRoute(key, route string) {
 	rg.svcClusterRouteMap[key] = route
 	rg.client.AddStaticRoutes([]string{route})
 }
 
-// withdrawRoute withdraws a route and removes it from the cache.
-func (rg *routeGenerator) withdrawRoute(key, route string) {
+// withdrawClusterRoute withdraws a route and removes it from the ClusterIP cache.
+func (rg *routeGenerator) withdrawClusterRoute(key, route string) {
 	rg.client.DeleteStaticRoutes([]string{route})
 	delete(rg.svcClusterRouteMap, key)
 }
