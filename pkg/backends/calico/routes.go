@@ -46,7 +46,7 @@ type routeGenerator struct {
 	svcInformer, epInformer cache.Controller
 	svcIndexer, epIndexer   cache.Indexer
 	svcClusterRouteMap      map[string]string
-	svcExternalRouteMap     map[string][]string
+	svcExternalRouteMap     map[string]map[string]bool
 	clusterCIDR             string
 }
 
@@ -72,7 +72,7 @@ func NewRouteGenerator(c *client, clusterCIDR string) (rg *routeGenerator, err e
 		client:              c,
 		nodeName:            nodename,
 		svcClusterRouteMap:  make(map[string]string),
-		svcExternalRouteMap: make(map[string][]string),
+		svcExternalRouteMap: make(map[string]map[string]bool),
 		clusterCIDR:         clusterCIDR,
 	}
 
@@ -215,6 +215,55 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 		// We were advertising this route, but should no longer do so.
 		rg.withdrawClusterRoute(key, cur)
 	}
+
+	// External IP's
+	if advertise {
+
+		advertisedExternalRoutes := rg.svcExternalRouteMap[key]
+		if advertisedExternalRoutes == nil {
+			advertisedExternalRoutes = make(map[string]bool)
+		}
+
+		externalRoutes := addSuffix(svc.Spec.ExternalIPs, "/32")
+
+		// Advertise any External IP's which we don't already advertise
+		for _, route := range externalRoutes {
+
+			// Advertise route if not already advertised
+			if _, ok := advertisedExternalRoutes[route]; !ok {
+				// TODO: advertise external IP route
+			}
+
+		}
+
+		// Withdraw any routes we are advertising that are no longer External IPs
+		for route := range advertisedExternalRoutes {
+			if !contains(externalRoutes, route) {
+				// TODO: withdraw external IP route
+			}
+		}
+
+	}
+
+}
+
+// addSuffix returns a new slice, with the suffix appended onto every item.
+func addSuffix(items []string, suffix string) []string {
+	res := make([]string, 0)
+	for _, item := range items {
+		res = append(res, item+suffix)
+	}
+	return res
+}
+
+// contains returns true if items contains the target.
+func contains(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 // advertiseThisService returns true if this service should be advertised on this node,
