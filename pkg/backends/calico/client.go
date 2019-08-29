@@ -115,7 +115,7 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 		nodeMeshEnabled:   nodeMeshEnabled,
 		nodeLabels:        make(map[string]map[string]string),
 		bgpPeers:          make(map[string]*apiv3.BGPPeer),
-		externalIPCIDRs:   make([]*net.IPNet, 0),
+		externalIPNets:    make([]*net.IPNet, 0),
 	}
 	for k, v := range globalDefaults {
 		c.cache[k] = v
@@ -280,8 +280,8 @@ type client struct {
 	// Whether the node to node mesh is enabled or not.
 	nodeMeshEnabled bool
 
-	// The whitelist of External IP CIDRs to advertise
-	externalIPCIDRs []*net.IPNet
+	// The whitelist of External IP CIDR Networks to advertise
+	externalIPNets []*net.IPNet
 
 	// This node's log level key.
 	nodeLogKey string

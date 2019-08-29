@@ -262,7 +262,7 @@ func (rg *routeGenerator) isAllowedExternalRoute(route string) bool {
 		return false
 	}
 
-	for _, allowedNet := range rg.client.externalIPCIDRs {
+	for _, allowedNet := range rg.client.externalIPNets {
 		if allowedNet.Contains(routeIP) {
 			return true
 		}
