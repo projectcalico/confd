@@ -229,6 +229,11 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 		// Advertise any External IP's which we don't already advertise
 		for _, route := range externalRoutes {
 
+			// Only advertise whitelisted External IP's
+			if !rg.isAllowedExternalRoute(route) {
+				continue
+			}
+
 			// Advertise route if not already advertised
 			if _, ok := advertisedExternalRoutes[route]; !ok {
 				rg.advertiseExternalRoute(key, route)
@@ -244,6 +249,27 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 		}
 
 	}
+
+}
+
+// isAllowedExternalRoute determines if the given route is in the list of
+// whitelisted External IP CIDR's given in the default bgpconfiguration.
+func (rg *routeGenerator) isAllowedExternalRoute(route string) bool {
+
+	routeIP, _, err := net.ParseCIDR(route)
+	if err != nil {
+		log.Errorf("Could not parse service External IP: %s: %v", route, err)
+		return false
+	}
+
+	for _, allowedNet := range rg.client.externalIPCIDRs {
+		if allowedNet.Contains(routeIP) {
+			return true
+		}
+	}
+
+	// Guilty until proven innocent
+	return false
 
 }
 
