@@ -352,6 +352,24 @@ func (c *client) OnInSync(source string) {
 	}
 }
 
+func (c *client) updateExternalIPNets() {
+	v1Str, _ := model.KeyToDefaultPath(model.GlobalBGPConfigKey{Name: "svc_external_ips"})
+	ipCIDRs := strings.Split(v1Str, ",")
+
+	ipNets := make([]*net.IPNet, 0)
+	for _, CIDR := range ipCIDRs {
+		_, ipNet, err := net.ParseCIDR(CIDR)
+		if err != nil {
+			log.Errorf("Failed to parse External IP CIDR: %s: %v", CIDR, err)
+			continue
+		}
+
+		ipNets = append(ipNets, ipNet)
+	}
+
+	c.externalIPNets = ipNets
+}
+
 type bgpPeer struct {
 	PeerIP      cnet.IP              `json:"ip"`
 	ASNum       numorstring.ASNumber `json:"as_num,string"`
@@ -656,6 +674,11 @@ func (c *client) OnUpdates(updates []api.Update) {
 				if cfgKey.Name == "as_num" {
 					log.Debugf("Global AS number update, recalculate peers")
 					needUpdatePeersV1 = true
+				}
+
+				if cfgKey.Name == "svc_external_ips" {
+					log.Debugf("Global serviceExternalIPs changed.")
+					c.updateExternalIPNets()
 				}
 			}
 
