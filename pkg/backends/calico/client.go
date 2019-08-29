@@ -100,9 +100,6 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 		nodeMeshEnabled = *cfg.Spec.NodeToNodeMeshEnabled
 	}
 
-	// Parse the whitelisted service External IP CIDRs from the bgpconfig spec.
-	externalIPCIDRs := parseExternalIPCIDRs(cfg.Spec.ServiceExternalIPs)
-
 	// We know the v2 client implements the backendClientAccessor interface.  Use it to
 	// get the backend client.
 	bc := cc.(backendClientAccessor).Backend()
@@ -191,25 +188,6 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 		c.OnInSync(SourceRouteGenerator)
 	}
 	return c, nil
-}
-
-// parseExternalIPCIDRs parses the SvcExternalIPBlock from a bgpconfiguration
-// into net.IPNet objects.
-func parseExternalIPCIDRs(IPBlocks []apiv3.SvcExternalIPBlock) []*net.IPNet {
-
-	ipNets := make([]*net.IPNet, 0)
-	for _, block := range IPBlocks {
-		_, ipNet, err := net.ParseCIDR(block.CIDR)
-		if err != nil {
-			log.Errorf("Failed to parse External IP CIDR: %s: %v", block, err)
-			continue
-		}
-
-		ipNets = append(ipNets, ipNet)
-	}
-
-	return ipNets
-
 }
 
 var ErrServiceNotReady = errors.New("Kubernetes service missing IP or port.")
