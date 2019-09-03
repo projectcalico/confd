@@ -231,6 +231,7 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 
 			// Only advertise whitelisted External IP's
 			if !rg.isAllowedExternalRoute(route) {
+				log.Infof("External IP not advertised as not whitelisted: %s", route)
 				continue
 			}
 
@@ -372,7 +373,7 @@ func (rg *routeGenerator) withdrawClusterRoute(key, route string) {
 // advertiseExternalRoute advertises a route for a service ExternalIP and
 // caches it.
 func (rg *routeGenerator) advertiseExternalRoute(key, route string) {
-	if rg.svcExternalRouteMap[key] == nil {
+	if _, hasKey := rg.svcExternalRouteMap[key]; !hasKey {
 		rg.svcExternalRouteMap[key] = make(map[string]bool)
 	}
 
