@@ -249,6 +249,8 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 			}
 		}
 
+	} else {
+		rg.unsetExternalRoutesForSvc(key)
 	}
 
 }
@@ -350,12 +352,18 @@ func (rg *routeGenerator) unsetRouteForSvc(obj interface{}) {
 	}
 
 	// Remove all External IP's
+	rg.unsetExternalRoutesForSvc(key)
+
+}
+
+// unsetExternalRoutesForSvc withdraws all routes for the service with
+// the given key.
+func (rg *routeGenerator) unsetExternalRoutesForSvc(key string) {
 	if rg.svcExternalRouteMap[key] != nil {
 		for route := range rg.svcExternalRouteMap[key] {
 			rg.withdrawExternalRoute(key, route)
 		}
 	}
-
 }
 
 // advertiseClusterRoute advertises a route for a service ClusterIP and caches it.
