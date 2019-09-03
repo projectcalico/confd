@@ -1,6 +1,8 @@
 package calico
 
 import (
+	"fmt"
+	"net"
 	"sync"
 
 	. "github.com/onsi/ginkgo"
@@ -26,6 +28,10 @@ func buildSimpleService() (svc *v1.Service, ep *v1.Endpoints) {
 			Type:                  v1.ServiceTypeClusterIP,
 			ClusterIP:             "127.0.0.1",
 			ExternalTrafficPolicy: v1.ServiceExternalTrafficPolicyTypeLocal,
+			ExternalIPs: []string{
+				"45.12.70.5",
+				"172.217.3.5",
+			},
 		}}
 	ep = &v1.Endpoints{
 		ObjectMeta: meta,
@@ -35,15 +41,29 @@ func buildSimpleService() (svc *v1.Service, ep *v1.Endpoints) {
 
 var _ = Describe("RouteGenerator", func() {
 	var rg *routeGenerator
+	var expectedExternalRouteMap map[string]bool
+
 	BeforeEach(func() {
+
+		_, ipNet1, _ := net.ParseCIDR("104.244.42.129/32")
+		_, ipNet2, _ := net.ParseCIDR("172.217.3.0/24")
+
+		expectedExternalRouteMap = make(map[string]bool)
+		expectedExternalRouteMap["172.217.3.5/32"] = true
+
 		rg = &routeGenerator{
-			nodeName:           "foobar",
-			svcIndexer:         cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
-			epIndexer:          cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
-			svcClusterRouteMap: make(map[string]string),
+			nodeName:            "foobar",
+			svcIndexer:          cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
+			epIndexer:           cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
+			svcClusterRouteMap:  make(map[string]string),
+			svcExternalRouteMap: make(map[string]map[string]bool),
 			client: &client{
 				cache:  make(map[string]string),
 				synced: true,
+				externalIPNets: []*net.IPNet{
+					ipNet1,
+					ipNet2,
+				},
 			},
 		}
 		rg.client.watcherCond = sync.NewCond(&rg.client.cacheLock)
@@ -73,7 +93,7 @@ var _ = Describe("RouteGenerator", func() {
 
 	Describe("(un)setRouteForSvc", func() {
 		Context("svc = svc, ep = nil", func() {
-			It("should set an unset routes for a service", func() {
+			It("should set and unset routes for a service", func() {
 				svc, ep := buildSimpleService()
 				addEndpointSubset(ep, rg.nodeName)
 
@@ -81,8 +101,12 @@ var _ = Describe("RouteGenerator", func() {
 				Expect(err).NotTo(HaveOccurred())
 				rg.setRouteForSvc(svc, nil)
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal("127.0.0.1/32"))
+				fmt.Fprintln(GinkgoWriter, rg.svcExternalRouteMap)
+				Expect(rg.svcExternalRouteMap["foo/bar"]).To(Equal(
+					expectedExternalRouteMap))
 				rg.unsetRouteForSvc(ep)
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(BeEmpty())
+				Expect(rg.svcExternalRouteMap["foo/bar"]).To(BeEmpty())
 			})
 		})
 		Context("svc = nil, ep = ep", func() {
@@ -94,6 +118,8 @@ var _ = Describe("RouteGenerator", func() {
 				Expect(err).NotTo(HaveOccurred())
 				rg.setRouteForSvc(nil, ep)
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal("127.0.0.1/32"))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).To(Equal(
+					expectedExternalRouteMap))
 				rg.unsetRouteForSvc(ep)
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(BeEmpty())
 			})
@@ -116,22 +142,27 @@ var _ = Describe("RouteGenerator", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("should remove clusterIPs when endpoints are deleted", func() {
+		It("should remove advertised IPs when endpoints are deleted", func() {
 			// Trigger a service add - it should update the cache with its route.
 			initRevision := rg.client.cacheRevision
 			rg.onSvcAdd(svc)
-			Expect(rg.client.cacheRevision).To(Equal(initRevision + 1))
+			Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 			Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal("127.0.0.1/32"))
+			Expect(rg.svcExternalRouteMap["foo/bar"]).To(Equal(
+				expectedExternalRouteMap))
 			Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
+			Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
 
-			// Simulate the remove of the local endpoint. It should withdraw the route.
+			// Simulate the remove of the local endpoint. It should withdraw the routes.
 			ep.Subsets = []v1.EndpointSubset{}
 			err := rg.epIndexer.Add(ep)
 			Expect(err).NotTo(HaveOccurred())
 			rg.onEPAdd(ep)
-			Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+			Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 			Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal(""))
+			Expect(rg.svcExternalRouteMap["foo/bar"]).To(BeEmpty())
 			Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal(""))
+			Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal(""))
 			Expect(rg.client.cache).To(Equal(map[string]string{}))
 		})
 
@@ -140,15 +171,51 @@ var _ = Describe("RouteGenerator", func() {
 				// add
 				initRevision := rg.client.cacheRevision
 				rg.onSvcAdd(svc)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 1))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal("127.0.0.1/32"))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 
 				// delete
 				rg.onSvcDelete(svc)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcClusterRouteMap).ToNot(HaveKey("foo/bar"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
+			})
+		})
+
+		Context("onSvc[Add|Delete]", func() {
+			It("should add the service's whitelisted externalIPs into the svcExternalRouteMap", func() {
+				// add
+				initRevision := rg.client.cacheRevision
+				rg.onSvcAdd(svc)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).To(Equal(
+					expectedExternalRouteMap))
+				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
+
+				// delete
+				rg.onSvcDelete(svc)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).ToNot(HaveKey("172.217.3.5/32"))
+				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
+			})
+		})
+
+		Context("onSvcUpdate", func() {
+			It("should add the service's whitelisted externalIPs into the svcExternalRouteMap and then remove them for unsupported service type", func() {
+				initRevision := rg.client.cacheRevision
+				rg.onSvcUpdate(nil, svc)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).To(Equal(
+					expectedExternalRouteMap))
+				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
+
+				// set to unsupport service type
+				svc.Spec.Type = v1.ServiceTypeExternalName
+				rg.onSvcUpdate(nil, svc)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).ToNot(HaveKey("172.217.3.5/32"))
+				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
 			})
 		})
 
@@ -156,14 +223,14 @@ var _ = Describe("RouteGenerator", func() {
 			It("should add the service's clusterIP into the svcClusterRouteMap and then remove it for unsupported service type", func() {
 				initRevision := rg.client.cacheRevision
 				rg.onSvcUpdate(nil, svc)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 1))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal("127.0.0.1/32"))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 
 				// set to unsupport service type
 				svc.Spec.Type = v1.ServiceTypeExternalName
 				rg.onSvcUpdate(nil, svc)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcClusterRouteMap).ToNot(HaveKey("foo/bar"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
 			})
@@ -174,15 +241,51 @@ var _ = Describe("RouteGenerator", func() {
 				// add
 				initRevision := rg.client.cacheRevision
 				rg.onEPAdd(ep)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 1))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal("127.0.0.1/32"))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 
 				// delete
 				rg.onEPDelete(ep)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcClusterRouteMap).ToNot(HaveKey("foo/bar"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
+			})
+		})
+
+		Context("onEp[Add|Delete]", func() {
+			It("should add the service's whitelisted externalIPs into the svcExternalRouteMap", func() {
+				// add
+				initRevision := rg.client.cacheRevision
+				rg.onEPAdd(ep)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).To(Equal(
+					expectedExternalRouteMap))
+				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
+
+				// delete
+				rg.onEPDelete(ep)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).ToNot(HaveKey("172.217.3.5/32"))
+				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
+			})
+		})
+
+		Context("onEpDelete", func() {
+			It("should add the service's whitelisted externalIPs into the svcExternalRouteMap and then remove it for unsupported service type", func() {
+				initRevision := rg.client.cacheRevision
+				rg.onEPUpdate(nil, ep)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).To(Equal(
+					expectedExternalRouteMap))
+				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
+
+				// set to unsupport service type
+				svc.Spec.Type = v1.ServiceTypeExternalName
+				rg.onEPUpdate(nil, ep)
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
+				Expect(rg.svcExternalRouteMap["foo/bar"]).ToNot(HaveKey("172.217.3.5/32"))
+				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
 			})
 		})
 
@@ -190,14 +293,14 @@ var _ = Describe("RouteGenerator", func() {
 			It("should add the service's clusterIP into the svcClusterRouteMap and then remove it for unsupported service type", func() {
 				initRevision := rg.client.cacheRevision
 				rg.onEPUpdate(nil, ep)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 1))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcClusterRouteMap["foo/bar"]).To(Equal("127.0.0.1/32"))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 
 				// set to unsupport service type
 				svc.Spec.Type = v1.ServiceTypeExternalName
 				rg.onEPUpdate(nil, ep)
-				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
+				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcClusterRouteMap).ToNot(HaveKey("foo/bar"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
 			})
