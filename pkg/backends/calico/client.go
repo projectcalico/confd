@@ -360,7 +360,7 @@ func (c *client) updateExternalIPNets() {
 	for _, CIDR := range ipCIDRs {
 		_, ipNet, err := net.ParseCIDR(CIDR)
 		if err != nil {
-			log.Errorf("Failed to parse External IP CIDR: %s: %v", CIDR, err)
+			log.WithError(err).Errorf("Failed to parse External IP CIDR: %s.", CIDR)
 			continue
 		}
 
