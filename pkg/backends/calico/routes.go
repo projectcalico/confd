@@ -261,7 +261,7 @@ func (rg *routeGenerator) isAllowedExternalRoute(route string) bool {
 
 	routeIP, _, err := net.ParseCIDR(route)
 	if err != nil {
-		log.Errorf("Could not parse service External IP: %s: %v", route, err)
+		log.WithError(err).Errorf("Could not parse service External IP: %s", route)
 		return false
 	}
 
