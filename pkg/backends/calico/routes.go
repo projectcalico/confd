@@ -361,9 +361,6 @@ func (rg *routeGenerator) unsetExternalRoutesForSvc(key string) {
 		for route := range rg.svcExternalRouteMap[key] {
 			rg.withdrawExternalRoute(key, route)
 		}
-		if len(rg.svcExternalRouteMap[key]) == 0 {
-			delete(rg.svcExternalRouteMap, key)
-		}
 	}
 }
 
@@ -397,6 +394,10 @@ func (rg *routeGenerator) withdrawExternalRoute(key, route string) {
 
 	if rg.svcExternalRouteMap[key] != nil {
 		delete(rg.svcExternalRouteMap[key], route)
+	}
+
+	if len(rg.svcExternalRouteMap[key]) == 0 {
+		delete(rg.svcExternalRouteMap, key)
 	}
 }
 
