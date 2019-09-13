@@ -218,7 +218,6 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 
 	// External IP's
 	if advertise {
-
 		advertisedExternalRoutes := rg.svcExternalRouteMap[key]
 		if advertisedExternalRoutes == nil {
 			advertisedExternalRoutes = make(map[string]bool)
@@ -248,7 +247,6 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 				rg.withdrawExternalRoute(key, route)
 			}
 		}
-
 	} else {
 		rg.unsetExternalRoutesForSvc(key)
 	}
