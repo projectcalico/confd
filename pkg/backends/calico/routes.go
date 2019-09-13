@@ -394,10 +394,10 @@ func (rg *routeGenerator) withdrawExternalRoute(key, route string) {
 
 	if rg.svcExternalRouteMap[key] != nil {
 		delete(rg.svcExternalRouteMap[key], route)
-	}
 
-	if len(rg.svcExternalRouteMap[key]) == 0 {
-		delete(rg.svcExternalRouteMap, key)
+		if len(rg.svcExternalRouteMap[key]) == 0 {
+			delete(rg.svcExternalRouteMap, key)
+		}
 	}
 }
 
