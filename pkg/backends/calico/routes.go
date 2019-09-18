@@ -421,7 +421,7 @@ func (rg *routeGenerator) withdrawRoute(key, route string) {
 	}
 }
 
-// withdrawRoutes withdraws all routes associated with the given key and
+// withdrawRoutes withdraws the given routes associated with the given key and
 // removes them from the cache.
 func (rg *routeGenerator) withdrawRoutes(key string, routes []string) {
 	for _, route := range routes {
