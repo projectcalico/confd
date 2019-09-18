@@ -205,6 +205,31 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 
 }
 
+// onBGPConfigurationUpdate is called from the calico client, whenever there
+// is a change to the svc_external_ips, and will update all of the routes
+// advertised for each service.
+func (rg *routeGenerator) onBGPConfigurationUpdate() {
+
+	// Get all the services that we know about
+	svcs := make([]*v1.Service, 0)
+	svcIfaces := rg.svcIndexer.List()
+	for _, svcIface := range svcIfaces {
+		svc, ok := svcIface.(*v1.Service)
+		if !ok {
+			log.Error("Type assertion failed for rg.svcIndexer result member. Will not process updates to routes advertised for service.")
+			continue
+		}
+
+		svcs = append(svcs, svc)
+	}
+
+	// Update the routes advertised for each service
+	for _, svc := range svcs {
+		rg.setRouteForSvc(svc, nil)
+	}
+
+}
+
 // getAllRoutesForService returns all the routes that should be advertised
 // for the given service.
 func (rg *routeGenerator) getAllRoutesForService(svc *v1.Service) []string {
