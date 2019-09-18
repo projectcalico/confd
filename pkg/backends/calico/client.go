@@ -178,10 +178,10 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 	// Create and start route generator.
 	clusterCIDR := os.Getenv(envAdvertiseClusterIPs)
 	if len(clusterCIDR) > 0 {
-		if rg, err := NewRouteGenerator(c, clusterCIDR); err != nil {
+		if c.rg, err = NewRouteGenerator(c, clusterCIDR); err != nil {
 			log.WithError(err).Fatal("Failed to start route generator")
 		} else {
-			rg.Start()
+			c.rg.Start()
 		}
 	} else {
 		log.Info(envAdvertiseClusterIPs + " not specified, no cluster ips will be advertised")
@@ -255,6 +255,9 @@ type client struct {
 	nodeV1Processor watchersyncer.SyncerUpdateProcessor
 	nodeLabels      map[string]map[string]string
 	bgpPeers        map[string]*apiv3.BGPPeer
+
+	// The route generator
+	rg *routeGenerator
 
 	// Readiness signals for individual data sources.
 	syncerReady, rgReady bool
