@@ -682,6 +682,7 @@ func (c *client) OnUpdates(updates []api.Update) {
 				if cfgKey.Name == "svc_external_ips" {
 					log.Debugf("Global serviceExternalIPs changed.")
 					c.updateExternalIPNets()
+					c.rg.onBGPConfigurationUpdate()
 				}
 			}
 
