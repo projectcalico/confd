@@ -45,8 +45,7 @@ type routeGenerator struct {
 	nodeName                string
 	svcInformer, epInformer cache.Controller
 	svcIndexer, epIndexer   cache.Indexer
-	svcClusterRouteMap      map[string]string
-	svcExternalRouteMap     map[string]map[string]bool
+	svcRouteMap             map[string]map[string]bool
 	clusterCIDR             string
 }
 
@@ -69,11 +68,10 @@ func NewRouteGenerator(c *client, clusterCIDR string) (rg *routeGenerator, err e
 
 	// initialize empty route generator
 	rg = &routeGenerator{
-		client:              c,
-		nodeName:            nodename,
-		svcClusterRouteMap:  make(map[string]string),
-		svcExternalRouteMap: make(map[string]map[string]bool),
-		clusterCIDR:         clusterCIDR,
+		client:      c,
+		nodeName:    nodename,
+		svcRouteMap: make(map[string]map[string]bool),
+		clusterCIDR: clusterCIDR,
 	}
 
 	// set up k8s client
@@ -190,7 +188,6 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 			return
 		}
 	}
-	logc := log.WithField("svc", fmt.Sprintf("%s/%s", svc.Namespace, svc.Name))
 
 	// see if any endpoints are on this node and advertise if so
 	// else remove the route if it also already exists
@@ -199,72 +196,97 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 
 	advertise := rg.advertiseThisService(svc, ep)
 	if advertise {
-		route := svc.Spec.ClusterIP + "/32"
-		if cur, exists := rg.svcClusterRouteMap[key]; !exists {
-			// This is a new route - send it through.
-			rg.advertiseClusterRoute(key, route)
-		} else if route != cur {
-			// The route has changed somehow. Send a delete for the old one
-			// and add the new one. We don't expect to hit this, since cluster IPs
-			// are immutable. But, handle it for good measure.
-			logc.Warn("ClusterIP for service changed, adjusting")
-			rg.withdrawClusterRoute(key, cur)
-			rg.advertiseClusterRoute(key, route)
-		}
-	} else if cur, exists := rg.svcClusterRouteMap[key]; exists {
-		// We were advertising this route, but should no longer do so.
-		rg.withdrawClusterRoute(key, cur)
-	}
-
-	// External IP's
-	if advertise {
-		advertisedExternalRoutes := rg.svcExternalRouteMap[key]
-		if advertisedExternalRoutes == nil {
-			advertisedExternalRoutes = make(map[string]bool)
-		}
-
-		externalRoutes := addSuffix(svc.Spec.ExternalIPs, "/32")
-
-		// Advertise any External IP's which we don't already advertise
-		for _, route := range externalRoutes {
-
-			// Only advertise whitelisted External IP's
-			if !rg.isAllowedExternalRoute(route) {
-				log.Infof("External IP not advertised as not whitelisted: %s", route)
-				continue
-			}
-
-			// Advertise route if not already advertised
-			if _, ok := advertisedExternalRoutes[route]; !ok {
-				rg.advertiseExternalRoute(key, route)
-			}
-
-		}
-
-		// Withdraw any routes we are advertising that are no longer External IPs
-		for route := range advertisedExternalRoutes {
-			if !contains(externalRoutes, route) {
-				rg.withdrawExternalRoute(key, route)
-			}
-		}
+		routes := rg.getAllRoutesForService(svc)
+		rg.advertiseRoutes(key, routes)
 	} else {
-		rg.unsetExternalRoutesForSvc(key)
+		routes := rg.getAdvertisedRoutes(key)
+		rg.withdrawRoutes(key, routes)
 	}
 
 }
 
-// isAllowedExternalRoute determines if the given route is in the list of
-// whitelisted External IP CIDR's given in the default bgpconfiguration.
-func (rg *routeGenerator) isAllowedExternalRoute(route string) bool {
+// getAllRoutesForService returns all the routes that should be advertised
+// for the given service.
+func (rg *routeGenerator) getAllRoutesForService(svc *v1.Service) []string {
 
-	routeIP, _, err := net.ParseCIDR(route)
-	if err != nil {
-		log.WithError(err).Errorf("Could not parse service External IP: %s", route)
+	routes := make([]string, 0)
+	routes = append(routes, svc.Spec.ClusterIP)
+
+	if svc.Spec.ExternalIPs != nil {
+		for _, externalIP := range svc.Spec.ExternalIPs {
+
+			// Only advertise whitelisted external IP's
+			if !rg.isAllowedExternalIP(externalIP) {
+				log.Infof("External IP not advertised as not whitelisted: %s", externalIP)
+				continue
+			}
+
+			routes = append(routes, externalIP)
+		}
+	}
+
+	return addSuffix(routes, "/32")
+
+}
+
+// getAdvertisedRoutes returns the routes that are currently advertised and
+// associated with the given key.
+func (rg *routeGenerator) getAdvertisedRoutes(key string) []string {
+
+	routes := make([]string, 0)
+
+	if rg.svcRouteMap[key] != nil {
+		for route := range rg.svcRouteMap[key] {
+			routes = append(routes, route)
+		}
+	}
+
+	return routes
+
+}
+
+// advertiseRoutes associates only the given routes with the given key,
+// and advertises the given routes. It also withdraws any routes that are no
+// longer associated with the given key.
+func (rg *routeGenerator) advertiseRoutes(key string, routes []string) {
+
+	advertisedRoutes := rg.svcRouteMap[key]
+	if advertisedRoutes == nil {
+		advertisedRoutes = make(map[string]bool)
+	}
+
+	// Withdraw any routes we are advertising that are no longer associated
+	// with this key.
+	for route := range advertisedRoutes {
+		if !contains(routes, route) {
+			rg.withdrawRoute(key, route)
+		}
+	}
+
+	// Advertise all routes that are not already advertised.
+	for _, route := range routes {
+
+		// Advertise route if not already advertised
+		if _, ok := advertisedRoutes[route]; !ok {
+			rg.advertiseRoute(key, route)
+		}
+
+	}
+
+}
+
+// isAllowedExternalIP determines if the given IP is in the list of
+// whitelisted External IP CIDR's given in the default bgpconfiguration.
+func (rg *routeGenerator) isAllowedExternalIP(externalIP string) bool {
+
+	ip := net.ParseIP(externalIP)
+	if ip == nil {
+		log.Errorf("Could not parse service External IP: %s", externalIP)
 		return false
 	}
 
 	for _, allowedNet := range rg.client.externalIPNets {
-		if allowedNet.Contains(routeIP) {
+		if allowedNet.Contains(ip) {
 			return true
 		}
 	}
@@ -344,60 +366,41 @@ func (rg *routeGenerator) unsetRouteForSvc(obj interface{}) {
 	rg.Lock()
 	defer rg.Unlock()
 
-	// Remove the route if it exists.
-	if route, exists := rg.svcClusterRouteMap[key]; exists {
-		rg.withdrawClusterRoute(key, route)
-	}
-
-	// Remove all External IP's
-	rg.unsetExternalRoutesForSvc(key)
+	routes := rg.getAdvertisedRoutes(key)
+	rg.withdrawRoutes(key, routes)
 
 }
 
-// unsetExternalRoutesForSvc withdraws all routes for the service with
-// the given key.
-func (rg *routeGenerator) unsetExternalRoutesForSvc(key string) {
-	if rg.svcExternalRouteMap[key] != nil {
-		for route := range rg.svcExternalRouteMap[key] {
-			rg.withdrawExternalRoute(key, route)
-		}
-	}
-}
-
-// advertiseClusterRoute advertises a route for a service ClusterIP and caches it.
-func (rg *routeGenerator) advertiseClusterRoute(key, route string) {
-	rg.svcClusterRouteMap[key] = route
-	rg.client.AddStaticRoutes([]string{route})
-}
-
-// withdrawClusterRoute withdraws a route and removes it from the ClusterIP cache.
-func (rg *routeGenerator) withdrawClusterRoute(key, route string) {
-	rg.client.DeleteStaticRoutes([]string{route})
-	delete(rg.svcClusterRouteMap, key)
-}
-
-// advertiseExternalRoute advertises a route for a service ExternalIP and
+// advertiseRoute advertises a route associated with the given key and
 // caches it.
-func (rg *routeGenerator) advertiseExternalRoute(key, route string) {
-	if _, hasKey := rg.svcExternalRouteMap[key]; !hasKey {
-		rg.svcExternalRouteMap[key] = make(map[string]bool)
+func (rg *routeGenerator) advertiseRoute(key, route string) {
+	if _, hasKey := rg.svcRouteMap[key]; !hasKey {
+		rg.svcRouteMap[key] = make(map[string]bool)
 	}
 
 	rg.client.AddStaticRoutes([]string{route})
-	rg.svcExternalRouteMap[key][route] = true
+	rg.svcRouteMap[key][route] = true
 }
 
-// withdrawExternalRoute withdraws a route for a service ExternalIP and
+// withdrawRoute withdraws a route associated with the given key and
 // removes it from the cache.
-func (rg *routeGenerator) withdrawExternalRoute(key, route string) {
+func (rg *routeGenerator) withdrawRoute(key, route string) {
 	rg.client.DeleteStaticRoutes([]string{route})
 
-	if rg.svcExternalRouteMap[key] != nil {
-		delete(rg.svcExternalRouteMap[key], route)
+	if rg.svcRouteMap[key] != nil {
+		delete(rg.svcRouteMap[key], route)
 
-		if len(rg.svcExternalRouteMap[key]) == 0 {
-			delete(rg.svcExternalRouteMap, key)
+		if len(rg.svcRouteMap[key]) == 0 {
+			delete(rg.svcRouteMap, key)
 		}
+	}
+}
+
+// withdrawRoutes withdraws all routes associated with the given key and
+// removes them from the cache.
+func (rg *routeGenerator) withdrawRoutes(key string, routes []string) {
+	for _, route := range routes {
+		rg.withdrawRoute(key, route)
 	}
 }
 
