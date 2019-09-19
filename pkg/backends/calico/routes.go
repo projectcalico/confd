@@ -46,6 +46,7 @@ type routeGenerator struct {
 	svcInformer, epInformer cache.Controller
 	svcIndexer, epIndexer   cache.Indexer
 	svcRouteMap             map[string]map[string]bool
+	routeAdvertisementCount map[string]int
 	clusterCIDR             string
 }
 
@@ -68,10 +69,11 @@ func NewRouteGenerator(c *client, clusterCIDR string) (rg *routeGenerator, err e
 
 	// initialize empty route generator
 	rg = &routeGenerator{
-		client:      c,
-		nodeName:    nodename,
-		svcRouteMap: make(map[string]map[string]bool),
-		clusterCIDR: clusterCIDR,
+		client:                  c,
+		nodeName:                nodename,
+		svcRouteMap:             make(map[string]map[string]bool),
+		routeAdvertisementCount: make(map[string]int),
+		clusterCIDR:             clusterCIDR,
 	}
 
 	// set up k8s client
@@ -400,12 +402,24 @@ func (rg *routeGenerator) advertiseRoute(key, route string) {
 
 	rg.client.AddStaticRoutes([]string{route})
 	rg.svcRouteMap[key][route] = true
+
+	rg.routeAdvertisementCount[route]++
 }
 
 // withdrawRoute withdraws a route associated with the given key and
 // removes it from the cache.
 func (rg *routeGenerator) withdrawRoute(key, route string) {
-	rg.client.DeleteStaticRoutes([]string{route})
+	// Only remove the advertisement if there are no other reasons this route
+	// should be advertised. For example, k8s will allow you to manually assign
+	// the same External IP to two different services; assign an External IP to
+	// a service which is the same as the service's cluster IP,
+	// and assign the same External IP twice to a service. In all of these
+	// scenarios, you would end up in a situation where the same route is
+	// "legitimately" being advertised twice from a node.
+	if rg.routeAdvertisementCount[route] == 1 {
+		rg.client.DeleteStaticRoutes([]string{route})
+	}
+	rg.routeAdvertisementCount[route]--
 
 	if rg.svcRouteMap[key] != nil {
 		delete(rg.svcRouteMap[key], route)

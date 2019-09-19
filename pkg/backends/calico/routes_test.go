@@ -53,10 +53,11 @@ var _ = Describe("RouteGenerator", func() {
 		expectedSvcRouteMap["172.217.3.5/32"] = true
 
 		rg = &routeGenerator{
-			nodeName:    "foobar",
-			svcIndexer:  cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
-			epIndexer:   cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
-			svcRouteMap: make(map[string]map[string]bool),
+			nodeName:                "foobar",
+			svcIndexer:              cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
+			epIndexer:               cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
+			svcRouteMap:             make(map[string]map[string]bool),
+			routeAdvertisementCount: make(map[string]int),
 			client: &client{
 				cache:  make(map[string]string),
 				synced: true,
@@ -143,6 +144,8 @@ var _ = Describe("RouteGenerator", func() {
 			rg.onSvcAdd(svc)
 			Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 			Expect(rg.svcRouteMap["foo/bar"]).To(Equal(expectedSvcRouteMap))
+			Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(1))
+			Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(1))
 			Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 			Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
 
@@ -153,6 +156,8 @@ var _ = Describe("RouteGenerator", func() {
 			rg.onEPAdd(ep)
 			Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 			Expect(rg.svcRouteMap["foo/bar"]).To(BeEmpty())
+			Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(0))
+			Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(0))
 			Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal(""))
 			Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal(""))
 			Expect(rg.client.cache).To(Equal(map[string]string{}))
@@ -165,6 +170,8 @@ var _ = Describe("RouteGenerator", func() {
 				rg.onSvcAdd(svc)
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcRouteMap["foo/bar"]).To(Equal(expectedSvcRouteMap))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(1))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(1))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
 
@@ -173,6 +180,8 @@ var _ = Describe("RouteGenerator", func() {
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcRouteMap["foo/bar"]).ToNot(HaveKey("172.217.3.5/32"))
 				Expect(rg.svcRouteMap["foo/bar"]).ToNot(HaveKey("127.0.0.1/32"))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(0))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(0))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
 			})
@@ -184,6 +193,8 @@ var _ = Describe("RouteGenerator", func() {
 				rg.onSvcUpdate(nil, svc)
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcRouteMap["foo/bar"]).To(Equal(expectedSvcRouteMap))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(1))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(1))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
 
@@ -192,6 +203,9 @@ var _ = Describe("RouteGenerator", func() {
 				rg.onSvcUpdate(nil, svc)
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcRouteMap["foo/bar"]).ToNot(HaveKey("172.217.3.5/32"))
+				Expect(rg.svcRouteMap["foo/bar"]).ToNot(HaveKey("127.0.0.1-32"))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(0))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(0))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
 			})
@@ -204,6 +218,8 @@ var _ = Describe("RouteGenerator", func() {
 				rg.onEPAdd(ep)
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcRouteMap["foo/bar"]).To(Equal(expectedSvcRouteMap))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(1))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(1))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
 
@@ -211,6 +227,8 @@ var _ = Describe("RouteGenerator", func() {
 				rg.onEPDelete(ep)
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcRouteMap).ToNot(HaveKey("foo/bar"))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(0))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(0))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
 			})
@@ -222,6 +240,8 @@ var _ = Describe("RouteGenerator", func() {
 				rg.onEPUpdate(nil, ep)
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 2))
 				Expect(rg.svcRouteMap["foo/bar"]).To(Equal(expectedSvcRouteMap))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(1))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(1))
 				Expect(rg.client.cache["/calico/staticroutes/172.217.3.5-32"]).To(Equal("172.217.3.5/32"))
 				Expect(rg.client.cache["/calico/staticroutes/127.0.0.1-32"]).To(Equal("127.0.0.1/32"))
 
@@ -230,6 +250,8 @@ var _ = Describe("RouteGenerator", func() {
 				rg.onEPUpdate(nil, ep)
 				Expect(rg.client.cacheRevision).To(Equal(initRevision + 4))
 				Expect(rg.svcRouteMap["foo/bar"]).ToNot(HaveKey("172.217.3.5/32"))
+				Expect(rg.routeAdvertisementCount["127.0.0.1/32"]).To(Equal(0))
+				Expect(rg.routeAdvertisementCount["172.217.3.5/32"]).To(Equal(0))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/172.217.3.5-32"))
 				Expect(rg.client.cache).ToNot(HaveKey("/calico/staticroutes/127.0.0.1-32"))
 			})
