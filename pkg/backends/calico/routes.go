@@ -211,7 +211,6 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 func (rg *routeGenerator) onBGPConfigurationUpdate() {
 
 	// Get all the services that we know about
-	svcs := make([]*v1.Service, 0)
 	svcIfaces := rg.svcIndexer.List()
 	for _, svcIface := range svcIfaces {
 		svc, ok := svcIface.(*v1.Service)
@@ -220,11 +219,7 @@ func (rg *routeGenerator) onBGPConfigurationUpdate() {
 			continue
 		}
 
-		svcs = append(svcs, svc)
-	}
-
-	// Update the routes advertised for each service
-	for _, svc := range svcs {
+		// Update the routes advertised for this service
 		rg.setRouteForSvc(svc, nil)
 	}
 
