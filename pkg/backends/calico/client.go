@@ -676,8 +676,13 @@ func (c *client) OnUpdates(updates []api.Update) {
 
 				if cfgKey.Name == "svc_external_ips" {
 					log.Debugf("Global serviceExternalIPs changed.")
-					c.updateExternalIPNets()
-					c.rg.onBGPConfigurationUpdate()
+					if u.UpdateType == api.UpdateTypeKVDeleted {
+						c.rg.onBGPConfigurationUpdate(nil)
+					} else {
+						v1Str := u.Value.(string)
+						nets := parseExternalIPNets(v1Str)
+						c.rg.onBGPConfigurationUpdate(nets)
+					}
 				}
 			}
 
