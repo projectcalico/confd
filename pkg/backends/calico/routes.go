@@ -418,8 +418,10 @@ func (rg *routeGenerator) withdrawRoute(key, route string) {
 	// "legitimately" being advertised twice from a node.
 	if rg.routeAdvertisementCount[route] == 1 {
 		rg.client.DeleteStaticRoutes([]string{route})
+		delete(rg.routeAdvertisementCount, route)
+	} else {
+		rg.routeAdvertisementCount[route]--
 	}
-	rg.routeAdvertisementCount[route]--
 
 	if rg.svcRouteMap[key] != nil {
 		delete(rg.svcRouteMap[key], route)
