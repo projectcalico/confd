@@ -197,10 +197,10 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 	advertise := rg.advertiseThisService(svc, ep)
 	if advertise {
 		routes := rg.getAllRoutesForService(svc)
-		rg.advertiseRoutes(key, routes)
+		rg.setRoutesForKey(key, routes)
 	} else {
 		routes := rg.getAdvertisedRoutes(key)
-		rg.withdrawRoutes(key, routes)
+		rg.withdrawRoutesForKey(key, routes)
 	}
 
 }
@@ -265,10 +265,10 @@ func (rg *routeGenerator) getAdvertisedRoutes(key string) []string {
 
 }
 
-// advertiseRoutes associates only the given routes with the given key,
+// setRoutesForKey associates only the given routes with the given key,
 // and advertises the given routes. It also withdraws any routes that are no
 // longer associated with the given key.
-func (rg *routeGenerator) advertiseRoutes(key string, routes []string) {
+func (rg *routeGenerator) setRoutesForKey(key string, routes []string) {
 
 	advertisedRoutes := rg.svcRouteMap[key]
 	if advertisedRoutes == nil {
@@ -387,7 +387,7 @@ func (rg *routeGenerator) unsetRouteForSvc(obj interface{}) {
 	defer rg.Unlock()
 
 	routes := rg.getAdvertisedRoutes(key)
-	rg.withdrawRoutes(key, routes)
+	rg.withdrawRoutesForKey(key, routes)
 
 }
 
@@ -416,9 +416,9 @@ func (rg *routeGenerator) withdrawRoute(key, route string) {
 	}
 }
 
-// withdrawRoutes withdraws the given routes associated with the given key and
-// removes them from the cache.
-func (rg *routeGenerator) withdrawRoutes(key string, routes []string) {
+// withdrawRoutesForKey withdraws the given routes associated with the given key
+// and removes them from the cache.
+func (rg *routeGenerator) withdrawRoutesForKey(key string, routes []string) {
 	for _, route := range routes {
 		rg.withdrawRoute(key, route)
 	}
