@@ -58,13 +58,13 @@ var _ = Describe("RouteGenerator", func() {
 			epIndexer:               cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil),
 			svcRouteMap:             make(map[string]map[string]bool),
 			routeAdvertisementCount: make(map[string]int),
+			externalIPNets: []*net.IPNet{
+				ipNet1,
+				ipNet2,
+			},
 			client: &client{
 				cache:  make(map[string]string),
 				synced: true,
-				externalIPNets: []*net.IPNet{
-					ipNet1,
-					ipNet2,
-				},
 			},
 		}
 		rg.client.watcherCond = sync.NewCond(&rg.client.cacheLock)

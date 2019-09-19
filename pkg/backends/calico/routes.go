@@ -48,6 +48,7 @@ type routeGenerator struct {
 	svcRouteMap             map[string]map[string]bool
 	routeAdvertisementCount map[string]int
 	clusterCIDR             string
+	externalIPNets          []*net.IPNet
 }
 
 // NewRouteGenerator initializes a kube-api client and the informers
@@ -74,6 +75,7 @@ func NewRouteGenerator(c *client, clusterCIDR string) (rg *routeGenerator, err e
 		svcRouteMap:             make(map[string]map[string]bool),
 		routeAdvertisementCount: make(map[string]int),
 		clusterCIDR:             clusterCIDR,
+		externalIPNets:          make([]*net.IPNet, 0),
 	}
 
 	// set up k8s client
@@ -208,9 +210,15 @@ func (rg *routeGenerator) setRouteForSvc(svc *v1.Service, ep *v1.Endpoints) {
 }
 
 // onBGPConfigurationUpdate is called from the calico client, whenever there
-// is a change to the svc_external_ips, and will update all of the routes
-// advertised for each service.
-func (rg *routeGenerator) onBGPConfigurationUpdate() {
+// is a change to the svc_external_ips. The set of whitelisted external IP networks
+// will be updated to the new values specified in the default BGP configuration.
+// All of the routes advertised for each service will then be updated to reflect
+// this change.
+func (rg *routeGenerator) onBGPConfigurationUpdate(newExternalNets []*net.IPNet) {
+
+	rg.Lock()
+	rg.externalIPNets = newExternalNets
+	rg.Unlock()
 
 	// Get all the services that we know about
 	svcIfaces := rg.svcIndexer.List()
@@ -307,7 +315,7 @@ func (rg *routeGenerator) isAllowedExternalIP(externalIP string) bool {
 		return false
 	}
 
-	for _, allowedNet := range rg.client.externalIPNets {
+	for _, allowedNet := range rg.externalIPNets {
 		if allowedNet.Contains(ip) {
 			return true
 		}
