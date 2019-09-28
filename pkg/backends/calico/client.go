@@ -174,18 +174,36 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 		c.syncer.Start()
 	}
 
-	// Create and start route generator.
-	clusterCIDR := os.Getenv(envAdvertiseClusterIPs)
-	if len(clusterCIDR) > 0 {
-		if c.rg, err = NewRouteGenerator(c, clusterCIDR); err != nil {
-			log.WithError(err).Fatal("Failed to start route generator")
-		} else {
-			c.rg.Start()
-		}
+	// Get cluster CIDRs. Prefer the env var, if specified.
+	clusterCIDRs := []string{}
+	if clusterCIDR := os.Getenv(envAdvertiseClusterIPs); len(clusterCIDR) != 0 {
+		clusterCIDRs = []string{clusterCIDR}
 	} else {
-		log.Info(envAdvertiseClusterIPs + " not specified, no cluster ips will be advertised")
+		for _, c := range cfg.Spec.ServiceClusterIPs {
+			clusterCIDRs = append(clusterCIDRs, c.CIDR)
+		}
+	}
+
+	// Get external IP CIDRs.
+	externalCIDRs := []string{}
+	for _, c := range cfg.Spec.ServiceExternalIPs {
+		externalCIDRs = append(externalCIDRs, c.CIDR)
+	}
+
+	if len(clusterCIDRs) != 0 || len(externalCIDRs) != 0 {
+		// Create and start route generator, if configured to do so. This can either be through
+		// environment variable, or the data store via BGPConfiguration.
+		if c.rg, err = NewRouteGenerator(c); err != nil {
+			log.WithError(err).Fatal("Failed to start route generator")
+		}
+		c.rg.onClusterIPsUpdate(clusterCIDRs)
+		c.rg.onExternalIPsUpdate(externalCIDRs)
+		c.rg.Start()
+	} else {
 		c.OnInSync(SourceRouteGenerator)
 	}
+
+	// If a cluster CIDR is set via env var, then send it to the route generator.
 	return c, nil
 }
 
@@ -330,6 +348,12 @@ func (c *client) OnInSync(source string) {
 		log.Info("Calico Syncer has indicated it is in sync")
 		c.syncerReady = true
 	case SourceRouteGenerator:
+		if c.rgReady {
+			// It's possible to get multiple messages from the route generator if
+			// we don't start it at start-of-day, but turn it on later due to a
+			// configuration change.
+			return
+		}
 		log.Info("RouteGenerator has indicated it is in sync")
 		c.rgReady = true
 	default:
@@ -349,23 +373,6 @@ func (c *client) OnInSync(source string) {
 		// based on the datastore config.
 		c.updateLogLevel()
 	}
-}
-
-func parseExternalIPNets(v1Str string) []*net.IPNet {
-	ipCIDRs := strings.Split(v1Str, ",")
-
-	ipNets := make([]*net.IPNet, 0)
-	for _, CIDR := range ipCIDRs {
-		_, ipNet, err := net.ParseCIDR(CIDR)
-		if err != nil {
-			log.WithError(err).Errorf("Failed to parse External IP CIDR: %s.", CIDR)
-			continue
-		}
-
-		ipNets = append(ipNets, ipNet)
-	}
-
-	return ipNets
 }
 
 type bgpPeer struct {
@@ -669,19 +676,57 @@ func (c *client) OnUpdates(updates []api.Update) {
 			// Not a v3 resource. We care about when the BGP configuration changes - recalculate
 			// peers when we receive AS number updates.
 			if cfgKey, ok := u.Key.(model.GlobalBGPConfigKey); ok {
+				var err error
+
 				if cfgKey.Name == "as_num" {
 					log.Debugf("Global AS number update, recalculate peers")
 					needUpdatePeersV1 = true
 				}
 
 				if cfgKey.Name == "svc_external_ips" {
-					log.Debugf("Global serviceExternalIPs changed.")
+					// We may need to start the route generator if this is the first time we've
+					// needed to advertise any services.
+					if c.rg == nil {
+						if c.rg, err = NewRouteGenerator(c); err != nil {
+							log.WithError(err).Error("Failed to start route generator")
+							continue
+						}
+						c.rg.Start()
+					}
+
+					log.Debugf("Global serviceExternalIPs update.")
 					if u.UpdateType == api.UpdateTypeKVDeleted {
-						c.rg.onBGPConfigurationUpdate(nil)
+						c.rg.onExternalIPsUpdate(nil)
 					} else {
-						v1Str := u.Value.(string)
-						nets := parseExternalIPNets(v1Str)
-						c.rg.onBGPConfigurationUpdate(nets)
+						cidrs := strings.Split(u.Value.(string), ",")
+						c.rg.onExternalIPsUpdate(cidrs)
+					}
+				}
+
+				if cfgKey.Name == "svc_cluster_ips" {
+					// We may need to start the route generator if this is the first time we've
+					// needed to advertise any services.
+					if c.rg == nil {
+						if c.rg, err = NewRouteGenerator(c); err != nil {
+							log.WithError(err).Error("Failed to start route generator")
+							continue
+						}
+						c.rg.Start()
+					}
+
+					// ClusterIPs are configurable through an environment varaible. If specified,
+					// that variable takes precendence over datastore config.
+					if len(os.Getenv(envAdvertiseClusterIPs)) != 0 {
+						log.Debugf("Ignoring serviceClusterIPs update due to environment variable %s", envAdvertiseClusterIPs)
+						continue
+					}
+
+					log.Debugf("Global serviceClusterIPs update.")
+					if u.UpdateType == api.UpdateTypeKVDeleted {
+						c.rg.onClusterIPsUpdate([]string{})
+					} else {
+						cidrs := strings.Split(u.Value.(string), ",")
+						c.rg.onClusterIPsUpdate(cidrs)
 					}
 				}
 			}
