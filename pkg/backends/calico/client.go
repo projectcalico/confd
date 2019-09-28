@@ -178,7 +178,7 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 	clusterCIDRs := []string{}
 	if clusterCIDR := os.Getenv(envAdvertiseClusterIPs); len(clusterCIDR) != 0 {
 		clusterCIDRs = []string{clusterCIDR}
-	} else {
+	} else if cfg != nil && cfg.Spec.ServiceExternalIPs != nil {
 		for _, c := range cfg.Spec.ServiceClusterIPs {
 			clusterCIDRs = append(clusterCIDRs, c.CIDR)
 		}
@@ -186,8 +186,10 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 
 	// Get external IP CIDRs.
 	externalCIDRs := []string{}
-	for _, c := range cfg.Spec.ServiceExternalIPs {
-		externalCIDRs = append(externalCIDRs, c.CIDR)
+	if cfg != nil && cfg.Spec.ServiceClusterIPs != nil {
+		for _, c := range cfg.Spec.ServiceExternalIPs {
+			externalCIDRs = append(externalCIDRs, c.CIDR)
+		}
 	}
 
 	if len(clusterCIDRs) != 0 || len(externalCIDRs) != 0 {
@@ -202,8 +204,6 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 	} else {
 		c.OnInSync(SourceRouteGenerator)
 	}
-
-	// If a cluster CIDR is set via env var, then send it to the route generator.
 	return c, nil
 }
 
@@ -696,10 +696,16 @@ func (c *client) OnUpdates(updates []api.Update) {
 
 					log.Debugf("Global serviceExternalIPs update.")
 					if u.UpdateType == api.UpdateTypeKVDeleted {
-						c.rg.onExternalIPsUpdate(nil)
+						// Run as a go routine so we don't block. We're already holding the cache lock,
+						// and the route generator will also try to grab it when it learns that
+						// cluster IPs have been updated.
+						go c.rg.onExternalIPsUpdate(nil)
 					} else {
+						// Run as a go routine so we don't block. We're already holding the cache lock,
+						// and the route generator will also try to grab it when it learns that
+						// cluster IPs have been updated.
 						cidrs := strings.Split(u.Value.(string), ",")
-						c.rg.onExternalIPsUpdate(cidrs)
+						go c.rg.onExternalIPsUpdate(cidrs)
 					}
 				}
 
@@ -723,10 +729,16 @@ func (c *client) OnUpdates(updates []api.Update) {
 
 					log.Debugf("Global serviceClusterIPs update.")
 					if u.UpdateType == api.UpdateTypeKVDeleted {
-						c.rg.onClusterIPsUpdate([]string{})
+						// Run as a go routine so we don't block. We're already holding the cache lock,
+						// and the route generator will also try to grab it when it learns that
+						// cluster IPs have been updated.
+						go c.rg.onClusterIPsUpdate([]string{})
 					} else {
+						// Run as a go routine so we don't block. We're already holding the cache lock,
+						// and the route generator will also try to grab it when it learns that
+						// cluster IPs have been updated.
 						cidrs := strings.Split(u.Value.(string), ",")
-						c.rg.onClusterIPsUpdate(cidrs)
+						go c.rg.onClusterIPsUpdate(cidrs)
 					}
 				}
 			}
