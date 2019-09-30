@@ -178,7 +178,7 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 	clusterCIDRs := []string{}
 	if clusterCIDR := os.Getenv(envAdvertiseClusterIPs); len(clusterCIDR) != 0 {
 		clusterCIDRs = []string{clusterCIDR}
-	} else if cfg != nil && cfg.Spec.ServiceExternalIPs != nil {
+	} else if cfg != nil && cfg.Spec.ServiceClusterIPs != nil {
 		for _, c := range cfg.Spec.ServiceClusterIPs {
 			clusterCIDRs = append(clusterCIDRs, c.CIDR)
 		}
@@ -186,7 +186,7 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 
 	// Get external IP CIDRs.
 	externalCIDRs := []string{}
-	if cfg != nil && cfg.Spec.ServiceClusterIPs != nil {
+	if cfg != nil && cfg.Spec.ServiceExternalIPs != nil {
 		for _, c := range cfg.Spec.ServiceExternalIPs {
 			externalCIDRs = append(externalCIDRs, c.CIDR)
 		}
@@ -195,8 +195,9 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 	if len(clusterCIDRs) != 0 || len(externalCIDRs) != 0 {
 		// Create and start route generator, if configured to do so. This can either be through
 		// environment variable, or the data store via BGPConfiguration.
+		// We only turn it on if configured to do so, to avoid needing to watch services / endpoints.
 		if c.rg, err = NewRouteGenerator(c); err != nil {
-			log.WithError(err).Fatal("Failed to start route generator")
+			log.WithError(err).Error("Failed to start route generator, routes will not be advertised")
 		}
 		c.rg.onClusterIPsUpdate(clusterCIDRs)
 		c.rg.onExternalIPsUpdate(externalCIDRs)
@@ -352,6 +353,7 @@ func (c *client) OnInSync(source string) {
 			// It's possible to get multiple messages from the route generator if
 			// we don't start it at start-of-day, but turn it on later due to a
 			// configuration change.
+			log.Debugf("Received second in sync notification from route generator, ignoring")
 			return
 		}
 		log.Info("RouteGenerator has indicated it is in sync")
@@ -720,8 +722,8 @@ func (c *client) OnUpdates(updates []api.Update) {
 						c.rg.Start()
 					}
 
-					// ClusterIPs are configurable through an environment varaible. If specified,
-					// that variable takes precendence over datastore config.
+					// ClusterIPs are configurable through an environment variable. If specified,
+					// that variable takes precedence over datastore config.
 					if len(os.Getenv(envAdvertiseClusterIPs)) != 0 {
 						log.Debugf("Ignoring serviceClusterIPs update due to environment variable %s", envAdvertiseClusterIPs)
 						continue
