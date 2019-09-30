@@ -688,7 +688,7 @@ func (c *client) OnUpdates(updates []api.Update) {
 				}
 
 				if cfgKey.Name == "svc_external_ips" {
-					log.Debugf("Global service external IP ranges  update.")
+					log.Debugf("Global service external IP ranges update.")
 					needsServiceAdvertismentUpdates = true
 				}
 
@@ -796,30 +796,28 @@ func (c *client) OnUpdates(updates []api.Update) {
 			// If this is the first time we've needed to start the route generator, then do so here.
 			var err error
 			if c.rg, err = NewRouteGenerator(c); err != nil {
-				log.WithError(err).Error("Failed to start route generator")
+				log.WithError(err).Error("Failed to start route generator, unable to advertise services")
+				c.rg = nil
 			} else {
-				c.updateRouteAdvertisements()
 				c.rg.Start()
 			}
-		} else {
-			// If the RG is already started, simply update advertisements.
-			c.updateRouteAdvertisements()
+		}
+
+		if c.rg != nil {
+			// Update CIDRs. In v1 format, they are a single comma-separate string. Split on the comma
+			// and pass a list of strings to the route generator.
+			externalIPs := strings.Split(c.cache["/calico/bgp/v1/global/svc_external_ips"], ",")
+			clusterCIDRs := strings.Split(c.cache["/calico/bgp/v1/global/svc_cluster_ips"], ",")
+
+			// Run these as separate goroutines so that we don't block. We're already holding the lock,
+			// and these calls may attempt to take the lock in order to update the cache.
+			go c.rg.onExternalIPsUpdate(externalIPs)
+			go c.rg.onClusterIPsUpdate(clusterCIDRs)
 		}
 	}
 
 	// Notify watcher thread that we've received new updates.
 	c.onNewUpdates()
-}
-
-// updateRouteAdvertisements sends updated state to the route generator based on contents of the cache.
-func (c *client) updateRouteAdvertisements() {
-	// Update CIDRs. In v1 format, they are a single comma-separate string. Split on the comma
-	// and pass a list of strings to the route generator.
-	externalIPs := strings.Split(c.cache["/calico/bgp/v1/global/svc_external_ips"], ",")
-	c.rg.onExternalIPsUpdate(externalIPs)
-
-	clusterCIDRs := strings.Split(c.cache["/calico/bgp/v1/global/svc_cluster_ips"], ",")
-	c.rg.onClusterIPsUpdate(clusterCIDRs)
 }
 
 func (c *client) incrementCacheRevision() {
