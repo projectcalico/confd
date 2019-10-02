@@ -40,8 +40,7 @@ ifeq ($(ARCH),x86_64)
 endif
 
 ###############################################################################
-GO_BUILD_VER?=v0.23
-
+GO_BUILD_VER?=v0.24
 CALICO_BUILD = calico/go-build:$(GO_BUILD_VER)
 
 CALICOCTL_VER=master
@@ -69,8 +68,6 @@ PACKAGE_NAME?=github.com/kelseyhightower/confd
 # All go files.
 SRC_FILES:=$(shell find . -name '*.go' -not -path "./vendor/*" )
 
-EXTRA_DOCKER_ARGS	:= -e GO111MODULE=on
-
 # Volume-mount gopath into the build container to cache go module's packages. If the environment is using multiple
 # comma-separated directories for gopath, use the first one, as that is the default one used by go modules.
 ifneq ($(GOPATH),)
@@ -82,7 +79,7 @@ else
 	GOMOD_CACHE = $(HOME)/go/pkg/mod
 endif
 
-EXTRA_DOCKER_ARGS += -v $(GOMOD_CACHE):/go/pkg/mod:rw
+EXTRA_DOCKER_ARGS	+= -e GO111MODULE=on -v $(GOMOD_CACHE):/go/pkg/mod:rw
 
 DOCKER_RUN := mkdir -p .go-pkg-cache $(GOMOD_CACHE) && \
 	docker run --rm \
@@ -103,27 +100,31 @@ clean:
 	rm -rf tests/logs
 
 ###############################################################################
-# Building the binary
+# Updating pins
 ###############################################################################
-build: bin/confd
-build-all: $(addprefix sub-build-,$(VALIDARCHES))
-sub-build-%:
-	$(MAKE) build ARCH=$*
+PIN_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
 
-# Default the typha repo and version but allow them to be overridden
-TYPHA_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
+define get_remote_version
+	$(shell git ls-remote http://$(1) $(2) 2>/dev/null | cut -f 1)
+endef
+
+# update_pin updates the given package's version to the latest available in the specified repo and branch.
+# $(1) should be the name of the package, $(2) and $(3) the repository and branch from which to update it.
+define update_pin
+	$(eval new_ver := $(call get_remote_version,$(2),$(3)))
+
+	$(DOCKER_RUN) -i $(CALICO_BUILD) sh -c '\
+		if [[ ! -z "$(new_ver)" ]]; then \
+			go get $(1)@$(new_ver); \
+			go mod download; \
+		fi'
+endef
+
+TYPHA_BRANCH?=$(PIN_BRANCH)
 TYPHA_REPO?=github.com/projectcalico/typha
-TYPHA_VERSION?=$(shell git ls-remote git@github.com:projectcalico/typha $(TYPHA_BRANCH) 2>/dev/null | cut -f 1)
-TYPHA_OLDVER?=$(shell $(DOCKER_RUN) $(CALICO_BUILD) go list -m -f "{{.Version}}" github.com/projectcalico/typha)
 
-## Update typha pin in go.mod
-update-typha:
-	$(DOCKER_RUN) $(CALICO_BUILD) sh -c '\
-	if [[ ! -z "$(TYPHA_VERSION)" ]] && [[ "$(TYPHA_VERSION)" != "$(TYPHA_OLDVER)" ]]; then \
-        	echo "Updating typha version $(TYPHA_OLDVER) to $(TYPHA_VERSION) from $(TYPHA_REPO)"; \
-                go mod edit -droprequire github.com/projectcalico/typha; \
-                go get $(TYPHA_REPO)@$(TYPHA_VERSION); \
-	fi'
+update-typha-pin:
+	$(call update_pin,github.com/projectcalico/typha,$(TYPHA_REPO),$(TYPHA_BRANCH))
 
 git-status:
 	git status --porcelain
@@ -131,16 +132,26 @@ git-status:
 git-config:
 ifdef CONFIRM
 	git config --global user.name "Semaphore Automatic Update"
-	git config --global user.email "marvin@tigera.io"
+	git config --global user.email "marvin@projectcalico.io"
 endif
 
 git-commit:
-	git diff-index --quiet HEAD || git commit -m "Semaphore Automatic Update" go.mod go.sum
+	git diff --quiet HEAD || git commit -m "Semaphore Automatic Update" go.mod go.sum
 
 git-push:
 	git push
 
-commit-pin-updates: update-typha git-status ci git-config git-commit git-push
+update-pins: update-typha-pin
+
+commit-pin-updates: update-pins git-status ci git-config git-commit git-push
+
+###############################################################################
+# Building the binary
+###############################################################################
+build: bin/confd
+build-all: $(addprefix sub-build-,$(VALIDARCHES))
+sub-build-%:
+	$(MAKE) build ARCH=$*
 
 bin/confd-$(ARCH): $(SRC_FILES)
 	$(DOCKER_RUN) $(CALICO_BUILD) sh -c 'go build -v -i -o $@ $(LDFLAGS) "$(PACKAGE_NAME)" && \
@@ -157,11 +168,11 @@ endif
 # Static checks
 ###############################################################################
 .PHONY: static-checks
+LINT_ARGS := --deadline 5m --max-issues-per-linter 0 --max-same-issues 0
 static-checks:
-	$(DOCKER_RUN) $(CALICO_BUILD) golangci-lint run --deadline 5m
+	$(DOCKER_RUN) $(CALICO_BUILD) golangci-lint run $(LINT_ARGS)
 
 .PHONY: fix
-## Fix static checks
 fix:
 	goimports -w $(SRC_FILES)
 
@@ -309,20 +320,17 @@ bin/typha:
 	-docker rm -f confd-typha
 
 foss-checks:
-	@echo Running $@...
-	@docker run --rm -v $(CURDIR):/go/src/$(PACKAGE_NAME):rw \
-	  -e LOCAL_USER_ID=$(LOCAL_USER_ID) \
-	  -e FOSSA_API_KEY=$(FOSSA_API_KEY) \
-	  -e GO111MODULE=on \
-	  -w /go/src/$(PACKAGE_NAME) \
-	  $(CALICO_BUILD) /usr/local/bin/fossa
+	$(DOCKER_RUN) -e FOSSA_API_KEY=$(FOSSA_API_KEY) $(CALICO_BUILD) /usr/local/bin/fossa
 
 ###############################################################################
 # CI
 ###############################################################################
+.PHONY: mod-download
+mod-download:
+	-$(DOCKER_RUN) $(CALICO_BUILD) go mod download
+
 .PHONY: ci
-## Run what CI runs
-ci: clean static-checks test
+ci: clean mod-download static-checks test
 
 ###############################################################################
 # Release
