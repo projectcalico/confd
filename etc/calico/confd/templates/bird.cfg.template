@@ -61,6 +61,9 @@ protocol direct {
   interface -"cali*", "*"; # Exclude cali* but include everything else.
 }
 
+protocol bfd {
+}
+
 {{if eq "" ($node_ip)}}# IPv4 disabled on this node.
 {{else}}{{$node_as_key := printf "/host/%s/as_num" (getenv "NODENAME")}}
 # Template for all BGP clients
@@ -70,16 +73,22 @@ template bgp bgp_template {
 {{- template "LOGGING"}}
   description "Connection to BGP peer";
   local as {{$node_as_num}};
-  multihop;
+  direct;
   gateway recursive; # This should be the default, but just in case.
   import all;        # Import all routes, since we don't know what the upstream
                      # topology is and therefore have to trust the ToR/RR.
   export filter calico_export_to_bgp_peers;  # Only want to export routes for workloads.
   add paths on;
-  graceful restart;  # See comment in kernel section about graceful restart.
   connect delay time 2;
   connect retry time 5;
   error wait time 5,30;
+  # The BFD+LLGR configuration here follows (with thanks!)
+  # https://vincent.bernat.ch/en/blog/2018-bgp-llgr.
+  bfd graceful;
+  graceful restart yes;
+  graceful restart time 0;
+  long lived graceful restart yes;
+  long lived stale time 120;
 }
 
 # ------------- Node-to-node mesh -------------
