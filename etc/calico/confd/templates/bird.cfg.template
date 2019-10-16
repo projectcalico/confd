@@ -41,12 +41,6 @@ protocol kernel {
   scan time 2;       # Scan kernel routing table every 2 seconds
   import all;
   export filter calico_kernel_programming; # Default is export none
-  graceful restart;  # Turn on graceful restart to reduce potential flaps in
-                     # routes when reloading BIRD configuration.  With a full
-                     # automatic mesh, there is no way to prevent BGP from
-                     # flapping since multiple nodes update their BGP
-                     # configuration at the same time, GR is not guaranteed to
-                     # work correctly in this scenario.
   merge paths on;
 }
 
@@ -82,13 +76,7 @@ template bgp bgp_template {
   connect delay time 2;
   connect retry time 5;
   error wait time 5,30;
-  # The BFD+LLGR configuration here follows (with thanks!)
-  # https://vincent.bernat.ch/en/blog/2018-bgp-llgr.
-  bfd graceful;
-  graceful restart yes;
-  graceful restart time 0;
-  long lived graceful restart yes;
-  long lived stale time 120;
+  bfd on;
 }
 
 # ------------- Node-to-node mesh -------------
