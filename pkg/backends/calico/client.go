@@ -174,16 +174,36 @@ func NewCalicoClient(confdConfig *config.Config) (*client, error) {
 		c.syncer.Start()
 	}
 
-	// Create and start route generator.
-	clusterCIDR := os.Getenv(envAdvertiseClusterIPs)
-	if len(clusterCIDR) > 0 {
-		if rg, err := NewRouteGenerator(c, clusterCIDR); err != nil {
-			log.WithError(err).Fatal("Failed to start route generator")
+	// Get cluster CIDRs. Prefer the env var, if specified.
+	clusterCIDRs := []string{}
+	if clusterCIDR := os.Getenv(envAdvertiseClusterIPs); len(clusterCIDR) != 0 {
+		clusterCIDRs = []string{clusterCIDR}
+	} else if cfg != nil && cfg.Spec.ServiceClusterIPs != nil {
+		for _, c := range cfg.Spec.ServiceClusterIPs {
+			clusterCIDRs = append(clusterCIDRs, c.CIDR)
+		}
+	}
+
+	// Get external IP CIDRs.
+	externalCIDRs := []string{}
+	if cfg != nil && cfg.Spec.ServiceExternalIPs != nil {
+		for _, c := range cfg.Spec.ServiceExternalIPs {
+			externalCIDRs = append(externalCIDRs, c.CIDR)
+		}
+	}
+
+	if len(clusterCIDRs) != 0 || len(externalCIDRs) != 0 {
+		// Create and start route generator, if configured to do so. This can either be through
+		// environment variable, or the data store via BGPConfiguration.
+		// We only turn it on if configured to do so, to avoid needing to watch services / endpoints.
+		if c.rg, err = NewRouteGenerator(c); err != nil {
+			log.WithError(err).Error("Failed to start route generator, routes will not be advertised")
 		} else {
-			rg.Start()
+			c.rg.onClusterIPsUpdate(clusterCIDRs)
+			c.rg.onExternalIPsUpdate(externalCIDRs)
+			c.rg.Start()
 		}
 	} else {
-		log.Info(envAdvertiseClusterIPs + " not specified, no cluster ips will be advertised")
 		c.OnInSync(SourceRouteGenerator)
 	}
 	return c, nil
@@ -254,6 +274,9 @@ type client struct {
 	nodeV1Processor watchersyncer.SyncerUpdateProcessor
 	nodeLabels      map[string]map[string]string
 	bgpPeers        map[string]*apiv3.BGPPeer
+
+	// The route generator
+	rg *routeGenerator
 
 	// Readiness signals for individual data sources.
 	syncerReady, rgReady bool
@@ -327,6 +350,13 @@ func (c *client) OnInSync(source string) {
 		log.Info("Calico Syncer has indicated it is in sync")
 		c.syncerReady = true
 	case SourceRouteGenerator:
+		if c.rgReady {
+			// It's possible to get multiple messages from the route generator if
+			// we don't start it at start-of-day, but turn it on later due to a
+			// configuration change.
+			log.Debugf("Received second in sync notification from route generator, ignoring")
+			return
+		}
 		log.Info("RouteGenerator has indicated it is in sync")
 		c.rgReady = true
 	default:
@@ -544,7 +574,7 @@ func (c *client) nodesWithIPAndAS(ip string, asNum numorstring.ASNumber) []strin
 		asStr = asNum.String()
 	}
 	nodeNames := []string{}
-	for nodeName, _ := range c.nodeLabels {
+	for nodeName := range c.nodeLabels {
 		nodeIPv4, nodeIPv6, nodeAS, _ := c.nodeToBGPFields(nodeName)
 		if (nodeIPv4 != ip) && (nodeIPv6 != ip) {
 			continue
@@ -630,6 +660,9 @@ func (c *client) OnUpdates(updates []api.Update) {
 	// Track whether these updates require BGP peerings to be recomputed.
 	needUpdatePeersV1 := false
 
+	// Track whether these updates require service advertisement to be recomputed.
+	needsServiceAdvertismentUpdates := false
+
 	for _, u := range updates {
 		log.Debugf("Update: %#v", u)
 
@@ -652,6 +685,22 @@ func (c *client) OnUpdates(updates []api.Update) {
 				if cfgKey.Name == "as_num" {
 					log.Debugf("Global AS number update, recalculate peers")
 					needUpdatePeersV1 = true
+				}
+
+				if cfgKey.Name == "svc_external_ips" {
+					log.Debugf("Global service external IP ranges update.")
+					needsServiceAdvertismentUpdates = true
+				}
+
+				if cfgKey.Name == "svc_cluster_ips" {
+					log.Debugf("Global service cluster IP ranges update.")
+					if len(os.Getenv(envAdvertiseClusterIPs)) != 0 {
+						// ClusterIPs are configurable through an environment variable. If specified,
+						// that variable takes precedence over datastore config, so we should ignore the update.
+						log.Debugf("Ignoring serviceClusterIPs update due to environment variable %s", envAdvertiseClusterIPs)
+					} else {
+						needsServiceAdvertismentUpdates = true
+					}
 				}
 			}
 
@@ -738,6 +787,40 @@ func (c *client) OnUpdates(updates []api.Update) {
 	if needUpdatePeersV1 {
 		log.Debug("Recompute BGP peerings")
 		c.updatePeersV1()
+	}
+
+	// If we need to update Service advertisement based on the updates, then do so.
+	if needsServiceAdvertismentUpdates {
+		log.Debug("Recompute service advertisement")
+		if c.rg == nil {
+			// If this is the first time we've needed to start the route generator, then do so here.
+			var err error
+			if c.rg, err = NewRouteGenerator(c); err != nil {
+				log.WithError(err).Error("Failed to start route generator, unable to advertise services")
+				c.rg = nil
+			} else {
+				c.rg.Start()
+			}
+		}
+
+		if c.rg != nil {
+			// Update CIDRs. In v1 format, they are a single comma-separate string. If the string isn't empty,
+			// split on the comma and pass a list of strings to the route generator.
+			// An empty string indicates a withdrawal of that set of service IPs.
+			var externalIPs []string
+			if len(c.cache["/calico/bgp/v1/global/svc_external_ips"]) > 0 {
+				externalIPs = strings.Split(c.cache["/calico/bgp/v1/global/svc_external_ips"], ",")
+			}
+			var clusterCIDRs []string
+			if len(c.cache["/calico/bgp/v1/global/svc_cluster_ips"]) > 0 {
+				clusterCIDRs = strings.Split(c.cache["/calico/bgp/v1/global/svc_cluster_ips"], ",")
+			}
+
+			// Run these as separate goroutines so that we don't block. We're already holding the lock,
+			// and these calls may attempt to take the lock in order to update the cache.
+			go c.rg.onExternalIPsUpdate(externalIPs)
+			go c.rg.onClusterIPsUpdate(clusterCIDRs)
+		}
 	}
 
 	// Notify watcher thread that we've received new updates.

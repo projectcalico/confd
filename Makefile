@@ -22,10 +22,10 @@ BUILDOS ?= $(shell uname -s | tr A-Z a-z)
 
 # canonicalized names for host architecture
 ifeq ($(BUILDARCH),aarch64)
-        BUILDARCH=arm64
+	BUILDARCH=arm64
 endif
 ifeq ($(BUILDARCH),x86_64)
-        BUILDARCH=amd64
+	BUILDARCH=amd64
 endif
 
 # unless otherwise set, I am building for my own architecture, i.e. not cross-compiling
@@ -33,16 +33,16 @@ ARCH ?= $(BUILDARCH)
 
 # canonicalized names for target architecture
 ifeq ($(ARCH),aarch64)
-        override ARCH=arm64
+	override ARCH=arm64
 endif
 ifeq ($(ARCH),x86_64)
-    override ARCH=amd64
+	override ARCH=amd64
 endif
 
 ###############################################################################
-GO_BUILD_VER?=v0.20
-
+GO_BUILD_VER?=v0.24
 CALICO_BUILD = calico/go-build:$(GO_BUILD_VER)
+PACKAGE_NAME?=github.com/projectcalico/confd
 
 CALICOCTL_VER=master
 CALICOCTL_CONTAINER_NAME=calico/ctl:$(CALICOCTL_VER)-$(ARCH)
@@ -64,67 +64,114 @@ MAKE_SURE_BIN_EXIST := $(shell mkdir -p bin)
 # owned by the current user.
 LOCAL_USER_ID?=$(shell id -u $$USER)
 
-PACKAGE_NAME?=github.com/kelseyhightower/confd
-
 # All go files.
 SRC_FILES:=$(shell find . -name '*.go' -not -path "./vendor/*" )
 
-DOCKER_GO_BUILD := mkdir -p .go-pkg-cache && \
-                   docker run --rm \
-                              --net=host \
-                              $(EXTRA_DOCKER_ARGS) \
-                              -e LOCAL_USER_ID=$(LOCAL_USER_ID) \
-                              -e GOARCH=$(ARCH) \
-                              -v $(HOME)/.glide:/home/user/.glide:rw \
-                              -v ${CURDIR}:/go/src/$(PACKAGE_NAME):rw \
-                              -v ${CURDIR}/.go-pkg-cache:/go/pkg:rw \
-                              -w /go/src/$(PACKAGE_NAME) \
-                              $(CALICO_BUILD)
+# Volume-mount gopath into the build container to cache go module's packages. If the environment is using multiple
+# comma-separated directories for gopath, use the first one, as that is the default one used by go modules.
+ifneq ($(GOPATH),)
+	# If the environment is using multiple comma-separated directories for gopath, use the first one, as that
+	# is the default one used by go modules.
+	GOMOD_CACHE = $(shell echo $(GOPATH) | cut -d':' -f1)/pkg/mod
+else
+	# If gopath is empty, default to $(HOME)/go.
+	GOMOD_CACHE = $(HOME)/go/pkg/mod
+endif
+
+EXTRA_DOCKER_ARGS	+= -e GO111MODULE=on -v $(GOMOD_CACHE):/go/pkg/mod:rw
+
+# Build mounts for running in "local build" mode. This allows an easy build using local development code,
+# assuming that there is a local checkout of libcalico and typha in the same directory as this repo.
+PHONY: local_build
+
+ifdef LOCAL_BUILD
+EXTRA_DOCKER_ARGS+=-v $(CURDIR)/../libcalico-go:/go/src/github.com/projectcalico/libcalico-go:rw
+EXTRA_DOCKER_ARGS+=-v $(CURDIR)/../typha:/go/src/github.com/projectcalico/typha:rw
+local_build:
+	$(DOCKER_RUN) $(CALICO_BUILD) go mod edit -replace=github.com/projectcalico/libcalico-go=../libcalico-go
+	$(DOCKER_RUN) $(CALICO_BUILD) go mod edit -replace=github.com/projectcalico/typha=../typha
+else
+local_build:
+	@echo "Building confd"
+endif
+
+DOCKER_RUN := mkdir -p .go-pkg-cache $(GOMOD_CACHE) && \
+	docker run --rm \
+		--net=host \
+		$(EXTRA_DOCKER_ARGS) \
+		-e LOCAL_USER_ID=$(LOCAL_USER_ID) \
+		-e GOCACHE=/go-cache \
+		-e GOARCH=$(ARCH) \
+		-e GOPATH=/go \
+		-v $(CURDIR):/go/src/$(PACKAGE_NAME):rw \
+		-v $(CURDIR)/.go-pkg-cache:/go-cache:rw \
+		-w /go/src/$(PACKAGE_NAME)
 
 .PHONY: clean
 clean:
+	rm -rf vendor
 	rm -rf bin/*
 	rm -rf tests/logs
 
 ###############################################################################
+# Updating pins
+###############################################################################
+PIN_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
+
+define get_remote_version
+	$(shell git ls-remote http://$(1) $(2) 2>/dev/null | cut -f 1)
+endef
+
+# update_pin updates the given package's version to the latest available in the specified repo and branch.
+# $(1) should be the name of the package, $(2) and $(3) the repository and branch from which to update it.
+define update_pin
+	$(eval new_ver := $(call get_remote_version,$(2),$(3)))
+
+	$(DOCKER_RUN) -i $(CALICO_BUILD) sh -c '\
+		if [[ ! -z "$(new_ver)" ]]; then \
+			go get $(1)@$(new_ver); \
+			go mod download; \
+		fi'
+endef
+
+TYPHA_BRANCH?=$(PIN_BRANCH)
+TYPHA_REPO?=github.com/projectcalico/typha
+
+update-typha-pin:
+	$(call update_pin,github.com/projectcalico/typha,$(TYPHA_REPO),$(TYPHA_BRANCH))
+
+git-status:
+	git status --porcelain
+
+git-config:
+ifdef CONFIRM
+	git config --global user.name "Semaphore Automatic Update"
+	git config --global user.email "marvin@tigera.io"
+endif
+
+git-commit:
+	git diff --quiet HEAD || git commit -m "Semaphore Automatic Update" go.mod go.sum
+
+git-push:
+	git push
+
+update-pins: update-typha-pin
+
+commit-pin-updates: update-pins git-status ci git-config git-commit git-push
+
+###############################################################################
 # Building the binary
 ###############################################################################
-build: bin/confd
+build: local_build bin/confd
 build-all: $(addprefix sub-build-,$(VALIDARCHES))
 sub-build-%:
 	$(MAKE) build ARCH=$*
 
-## Create the vendor directory
-vendor: glide.lock
-	# Ensure that the glide cache directory exists.
-	mkdir -p $(HOME)/.glide
-	$(DOCKER_GO_BUILD) glide install -strip-vendor
-
-# Default the typha repo and version but allow them to be overridden
-TYPHA_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
-TYPHA_REPO?=github.com/projectcalico/typha
-TYPHA_VERSION?=$(shell git ls-remote git@github.com:projectcalico/typha $(TYPHA_BRANCH) 2>/dev/null | cut -f 1)
-
-## Update typha pin in glide.yaml
-update-libcalico update-typha:
-	$(DOCKER_GO_BUILD) sh -c '\
-        echo "Updating typha to $(TYPHA_VERSION) from $(TYPHA_REPO)"; \
-        export OLD_VER=$$(grep --after 50 typha glide.yaml |grep --max-count=1 --only-matching --perl-regexp "version:\s*\K[^\s]+") ;\
-        echo "Old version: $$OLD_VER";\
-        if [ $(TYPHA_VERSION) != $$OLD_VER ]; then \
-            sed -i "s/$$OLD_VER/$(TYPHA_VERSION)/" glide.yaml && \
-            if [ $(TYPHA_REPO) != "github.com/projectcalico/typha" ]; then \
-              glide mirror set https://github.com/projectcalico/typha $(TYPHA_REPO) --vcs git; glide mirror list; \
-            fi;\
-          glide up --strip-vendor || glide up --strip-vendor; \
-        fi'
-
-bin/confd-$(ARCH): $(SRC_FILES) vendor
-	$(DOCKER_GO_BUILD) \
-	    sh -c 'go build -v -i -o $@ $(LDFLAGS) "$(PACKAGE_NAME)" && \
+bin/confd-$(ARCH): $(SRC_FILES)
+	$(DOCKER_RUN) $(CALICO_BUILD) sh -c 'go build -v -i -o $@ $(LDFLAGS) "$(PACKAGE_NAME)" && \
 		( ldd bin/confd-$(ARCH) 2>&1 | grep -q -e "Not a valid dynamic program" \
 			-e "not a dynamic executable" || \
-	             ( echo "Error: bin/confd was not statically linked"; false ) )'
+		     ( echo "Error: bin/confd was not statically linked"; false ) )'
 
 bin/confd: bin/confd-$(ARCH)
 ifeq ($(ARCH),amd64)
@@ -135,17 +182,11 @@ endif
 # Static checks
 ###############################################################################
 .PHONY: static-checks
-## Perform static checks on the code.
-static-checks: vendor
-	docker run --rm \
-		-e LOCAL_USER_ID=$(LOCAL_USER_ID) \
-		-v $(CURDIR):/go/src/$(PACKAGE_NAME) \
-		-w /go/src/$(PACKAGE_NAME) \
-		$(CALICO_BUILD) \
-		gometalinter --deadline=300s --disable-all --enable=vet --enable=errcheck  --enable=goimports --vendor --exclude=vendor ./...
+LINT_ARGS := --deadline 5m --max-issues-per-linter 0 --max-same-issues 0
+static-checks:
+	$(DOCKER_RUN) $(CALICO_BUILD) golangci-lint run $(LINT_ARGS)
 
 .PHONY: fix
-## Fix static checks
 fix:
 	goimports -w $(SRC_FILES)
 
@@ -163,13 +204,16 @@ test-kdd: bin/confd bin/kubectl bin/bird bin/bird6 bin/calico-node bin/calicoctl
 	-git clean -fx etc/calico/confd
 	docker run --rm --net=host \
 		-v $(CURDIR)/tests/:/tests/ \
-		-v $(CURDIR)/vendor:/vendor/ \
 		-v $(CURDIR)/bin:/calico/bin/ \
 		-v $(CURDIR)/etc/calico:/etc/calico/ \
+		-v $(CURDIR):/go/src/$(PACKAGE_NAME):rw \
+		-e GOPATH=/go \
 		-e LOCAL_USER_ID=0 \
 		-e FELIX_TYPHAADDR=127.0.0.1:5473 \
 		-e FELIX_TYPHAREADTIMEOUT=50 \
 		-e UPDATE_EXPECTED_DATA=$(UPDATE_EXPECTED_DATA) \
+		-e GO111MODULE=on \
+		-w /go/src/$(PACKAGE_NAME) \
 		$(CALICO_BUILD) /tests/test_suite_kdd.sh || \
 	{ \
 	    echo; \
@@ -182,8 +226,8 @@ test-kdd: bin/confd bin/kubectl bin/bird bin/bird6 bin/calico-node bin/calicoctl
 	    echo === Typha log:; \
 	    cat tests/logs/kdd/typha || true; \
 	    echo; \
-            false; \
-        }
+	    false; \
+	}
 	-git clean -fx etc/calico/confd
 
 .PHONY: test-etcd
@@ -194,21 +238,18 @@ test-etcd: bin/confd bin/etcdctl bin/bird bin/bird6 bin/calico-node bin/kubectl 
 		-v $(CURDIR)/tests/:/tests/ \
 		-v $(CURDIR)/bin:/calico/bin/ \
 		-v $(CURDIR)/etc/calico:/etc/calico/ \
+		-v $(CURDIR):/go/src/$(PACKAGE_NAME):rw \
+		-e GOPATH=/go \
 		-e LOCAL_USER_ID=0 \
 		-e UPDATE_EXPECTED_DATA=$(UPDATE_EXPECTED_DATA) \
+		-e GO111MODULE=on \
 		$(CALICO_BUILD) /tests/test_suite_etcd.sh
 	-git clean -fx etc/calico/confd
 
 .PHONY: ut
 ## Run the fast set of unit tests in a container.
-ut: vendor
-	-mkdir -p .go-pkg-cache
-	docker run --rm -t --privileged --net=host \
-		-e LOCAL_USER_ID=$(LOCAL_USER_ID) \
-		-v $(CURDIR):/go/src/$(PACKAGE_NAME):rw \
-		-v $(CURDIR)/.go-pkg-cache:/go-cache/:rw \
-		-e GOCACHE=/go-cache \
-		$(CALICO_BUILD) sh -c 'cd /go/src/$(PACKAGE_NAME) && ginkgo -r --skipPackage vendor $(GINKGO_ARGS) .'
+ut: local_build
+	$(DOCKER_RUN) --privileged $(CALICO_BUILD) sh -c 'cd /go/src/$(PACKAGE_NAME) && ginkgo -r .'
 
 ## Etcd is used by the kubernetes
 # NOTE: https://quay.io/repository/coreos/etcd is available *only* for the following archs with the following tags:
@@ -222,6 +263,7 @@ COREOS_ETCD = quay.io/coreos/etcd:$(ETCD_VER)
 endif
 run-etcd: stop-etcd
 	docker run --detach \
+	-e GO111MODULE=on \
 	--net=host \
 	--name calico-etcd $(COREOS_ETCD) \
 	etcd \
@@ -291,20 +333,18 @@ bin/typha:
 	  touch $@
 	-docker rm -f confd-typha
 
-foss-checks: vendor
-	@echo Running $@...
-	@docker run --rm -v $(CURDIR):/go/src/$(PACKAGE_NAME):rw \
-	  -e LOCAL_USER_ID=$(LOCAL_USER_ID) \
-	  -e FOSSA_API_KEY=$(FOSSA_API_KEY) \
-	  -w /go/src/$(PACKAGE_NAME) \
-	  $(CALICO_BUILD) /usr/local/bin/fossa
+foss-checks:
+	$(DOCKER_RUN) -e FOSSA_API_KEY=$(FOSSA_API_KEY) $(CALICO_BUILD) /usr/local/bin/fossa
 
 ###############################################################################
 # CI
 ###############################################################################
+.PHONY: mod-download
+mod-download:
+	-$(DOCKER_RUN) $(CALICO_BUILD) go mod download
+
 .PHONY: ci
-## Run what CI runs
-ci: clean static-checks test
+ci: clean mod-download static-checks test
 
 ###############################################################################
 # Release
@@ -360,24 +400,20 @@ help:
 	@echo
 	@echo "  make build ARCH=arm64"
 	@echo
-	@echo "Initial set-up:"
-	@echo
-	@echo "  make vendor  Update/install the go build dependencies."
-	@echo
 	@echo "Builds:"
 	@echo
-	@echo "  make build           Build the binary."
+	@echo "  make build	Build the binary."
 	@echo
 	@echo "Tests:"
 	@echo
-	@echo "  make test                Run all tests."
-	@echo "  make test-kdd            Run kdd tests."
-	@echo "  make test-etcd           Run etcd tests."
+	@echo "  make test	Run all tests."
+	@echo "  make test-kdd	Run kdd tests."
+	@echo "  make test-etcd	Run etcd tests."
 	@echo
 	@echo "Maintenance:"
-	@echo "  make clean         Remove binary files and docker images."
+	@echo "  make clean	Remove binary files and docker images."
 	@echo "-----------------------------------------"
-	@echo "ARCH (target):          $(ARCH)"
-	@echo "BUILDARCH (host):       $(BUILDARCH)"
-	@echo "CALICO_BUILD:     $(CALICO_BUILD)"
+	@echo "ARCH (target):	$(ARCH)"
+	@echo "BUILDARCH (host):$(BUILDARCH)"
+	@echo "CALICO_BUILD:	$(CALICO_BUILD)"
 	@echo "-----------------------------------------"

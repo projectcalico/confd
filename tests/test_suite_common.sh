@@ -24,7 +24,6 @@ execute_test_suite() {
     if [ "$DATASTORE_TYPE" = etcdv3 ]; then
 	run_extra_test test_node_deletion
 	run_extra_test test_idle_peers
-	run_extra_test test_static_routes
 	run_extra_test test_router_id_hash
 	echo "Extra etcdv3 tests passed"
     fi
@@ -40,7 +39,7 @@ execute_test_suite() {
     # node mesh enabled, so turn it on now before we start confd.
     echo "Execute daemon-mode tests"
     turn_mesh_on
-    for i in $(seq 1 5); do
+    for i in $(seq 1 2); do
         execute_tests_daemon
     done
     echo "Daemon-mode tests passed"
@@ -53,13 +52,6 @@ run_extra_test() {
     echo "==============================="
     eval $1
     echo "==============================="
-}
-
-test_static_routes() {
-    export CALICO_ADVERTISE_CLUSTER_IPS=10.101.0.0/16
-    run_individual_test_oneshot 'mesh/static-routes'
-    export -n CALICO_ADVERTISE_CLUSTER_IPS
-    unset CALICO_ADVERTISE_CLUSTER_IPS
 }
 
 test_node_deletion() {
@@ -261,7 +253,7 @@ execute_tests_daemon() {
     echo "Running with PID " $CONFD_PID
 
     # Run the node-mesh-enabled tests.
-    for i in $(seq 1 5); do
+    for i in $(seq 1 2); do
         run_individual_test 'mesh/ipip-always'
         run_individual_test 'mesh/ipip-cross-subnet'
         run_individual_test 'mesh/ipip-off'
@@ -271,7 +263,7 @@ execute_tests_daemon() {
     turn_mesh_off
 
     # Run the explicit peering tests.
-    for i in $(seq 1 5); do
+    for i in $(seq 1 2); do
         run_individual_test 'explicit_peering/global'
         run_individual_test 'explicit_peering/specific_node'
         run_individual_test 'explicit_peering/selectors'
@@ -305,6 +297,7 @@ execute_tests_oneshot() {
         run_individual_test_oneshot 'explicit_peering/specific_node'
         run_individual_test_oneshot 'explicit_peering/selectors'
         run_individual_test_oneshot 'explicit_peering/route_reflector'
+        run_individual_test_oneshot 'mesh/static-routes'
     done
 }
 
