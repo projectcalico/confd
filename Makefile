@@ -1,84 +1,24 @@
-# Shortcut targets
-default: build
+PACKAGE_NAME=github.com/projectcalico/confd
+GO_BUILD_VER=v0.27
 
-## Build binary for current platform
-all: build
+MAKE_BRANCH?=$(GO_BUILD_VER)
+MAKE_REPO?=https://raw.githubusercontent.com/projectcalico/go-build/$(MAKE_BRANCH)/Makefile.common
 
-## Run the tests for the current platform/architecture
+get_common:=$(shell wget -nc -nv $(MAKE_REPO) -O Makefile.common)
+include Makefile.common
+
 test: ut test-kdd test-etcd
-
-###############################################################################
-# Both native and cross architecture builds are supported.
-# The target architecture is select by setting the ARCH variable.
-# When ARCH is undefined it is set to the detected host architecture.
-# When ARCH differs from the host architecture a crossbuild will be performed.
-ARCHES=$(patsubst Dockerfile.%,%,$(wildcard Dockerfile.*))
-
-# BUILDARCH is the host architecture
-# ARCH is the target architecture
-# we need to keep track of them separately
-BUILDARCH ?= $(shell uname -m)
-BUILDOS ?= $(shell uname -s | tr A-Z a-z)
-
-# canonicalized names for host architecture
-ifeq ($(BUILDARCH),aarch64)
-	BUILDARCH=arm64
-endif
-ifeq ($(BUILDARCH),x86_64)
-	BUILDARCH=amd64
-endif
-
-# unless otherwise set, I am building for my own architecture, i.e. not cross-compiling
-ARCH ?= $(BUILDARCH)
-
-# canonicalized names for target architecture
-ifeq ($(ARCH),aarch64)
-	override ARCH=arm64
-endif
-ifeq ($(ARCH),x86_64)
-	override ARCH=amd64
-endif
-
-###############################################################################
-GO_BUILD_VER?=v0.24
-CALICO_BUILD = calico/go-build:$(GO_BUILD_VER)
-PACKAGE_NAME?=github.com/projectcalico/confd
 
 CALICOCTL_VER=master
 CALICOCTL_CONTAINER_NAME=calico/ctl:$(CALICOCTL_VER)-$(ARCH)
 TYPHA_VER=master
 TYPHA_CONTAINER_NAME=calico/typha:$(TYPHA_VER)-$(ARCH)
-K8S_VERSION?=v1.14.1
-ETCD_VER?=v3.3.7
-BIRD_VER=v0.3.1
 LOCAL_IP_ENV?=$(shell ip route get 8.8.8.8 | head -1 | awk '{print $$7}')
 
-GIT_DESCRIPTION:=$(shell git describe --tags || echo '<unknown>')
 LDFLAGS=-ldflags "-X $(PACKAGE_NAME)/pkg/buildinfo.GitVersion=$(GIT_DESCRIPTION)"
-
-# Ensure that the bin directory is always created
-MAKE_SURE_BIN_EXIST := $(shell mkdir -p bin)
-
-# Figure out the users UID.  This is needed to run docker containers
-# as the current user and ensure that files built inside containers are
-# owned by the current user.
-LOCAL_USER_ID?=$(shell id -u $$USER)
 
 # All go files.
 SRC_FILES:=$(shell find . -name '*.go' -not -path "./vendor/*" )
-
-# Volume-mount gopath into the build container to cache go module's packages. If the environment is using multiple
-# comma-separated directories for gopath, use the first one, as that is the default one used by go modules.
-ifneq ($(GOPATH),)
-	# If the environment is using multiple comma-separated directories for gopath, use the first one, as that
-	# is the default one used by go modules.
-	GOMOD_CACHE = $(shell echo $(GOPATH) | cut -d':' -f1)/pkg/mod
-else
-	# If gopath is empty, default to $(HOME)/go.
-	GOMOD_CACHE = $(HOME)/go/pkg/mod
-endif
-
-EXTRA_DOCKER_ARGS	+= -e GO111MODULE=on -v $(GOMOD_CACHE):/go/pkg/mod:rw
 
 # Build mounts for running in "local build" mode. This allows an easy build using local development code,
 # assuming that there is a local checkout of libcalico and typha in the same directory as this repo.
@@ -95,18 +35,6 @@ local_build:
 	@echo "Building confd"
 endif
 
-DOCKER_RUN := mkdir -p .go-pkg-cache $(GOMOD_CACHE) && \
-	docker run --rm \
-		--net=host \
-		$(EXTRA_DOCKER_ARGS) \
-		-e LOCAL_USER_ID=$(LOCAL_USER_ID) \
-		-e GOCACHE=/go-cache \
-		-e GOARCH=$(ARCH) \
-		-e GOPATH=/go \
-		-v $(CURDIR):/go/src/$(PACKAGE_NAME):rw \
-		-v $(CURDIR)/.go-pkg-cache:/go-cache:rw \
-		-w /go/src/$(PACKAGE_NAME)
-
 .PHONY: clean
 clean:
 	rm -rf vendor
@@ -116,48 +44,7 @@ clean:
 ###############################################################################
 # Updating pins
 ###############################################################################
-PIN_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
-
-define get_remote_version
-	$(shell git ls-remote http://$(1) $(2) 2>/dev/null | cut -f 1)
-endef
-
-# update_pin updates the given package's version to the latest available in the specified repo and branch.
-# $(1) should be the name of the package, $(2) and $(3) the repository and branch from which to update it.
-define update_pin
-	$(eval new_ver := $(call get_remote_version,$(2),$(3)))
-
-	$(DOCKER_RUN) -i $(CALICO_BUILD) sh -c '\
-		if [[ ! -z "$(new_ver)" ]]; then \
-			go get $(1)@$(new_ver); \
-			go mod download; \
-		fi'
-endef
-
-TYPHA_BRANCH?=$(PIN_BRANCH)
-TYPHA_REPO?=github.com/projectcalico/typha
-
-update-typha-pin:
-	$(call update_pin,github.com/projectcalico/typha,$(TYPHA_REPO),$(TYPHA_BRANCH))
-
-git-status:
-	git status --porcelain
-
-git-config:
-ifdef CONFIRM
-	git config --global user.name "Semaphore Automatic Update"
-	git config --global user.email "marvin@tigera.io"
-endif
-
-git-commit:
-	git diff --quiet HEAD || git commit -m "Semaphore Automatic Update" go.mod go.sum
-
-git-push:
-	git push
-
 update-pins: update-typha-pin
-
-commit-pin-updates: update-pins git-status ci git-config git-commit git-push
 
 ###############################################################################
 # Building the binary
@@ -179,21 +66,8 @@ ifeq ($(ARCH),amd64)
 endif
 
 ###############################################################################
-# Static checks
-###############################################################################
-.PHONY: static-checks
-LINT_ARGS := --deadline 5m --max-issues-per-linter 0 --max-same-issues 0
-static-checks:
-	$(DOCKER_RUN) $(CALICO_BUILD) golangci-lint run $(LINT_ARGS)
-
-.PHONY: fix
-fix:
-	goimports -w $(SRC_FILES)
-
-###############################################################################
 # Unit Tests
 ###############################################################################
-
 # Set to true when calling test-xxx to update the rendered templates instead of
 # checking them.
 UPDATE_EXPECTED_DATA?=false
@@ -248,7 +122,7 @@ test-etcd: bin/confd bin/etcdctl bin/bird bin/bird6 bin/calico-node bin/kubectl 
 
 .PHONY: ut
 ## Run the fast set of unit tests in a container.
-ut: local_build
+ut: local_build test-kdd test-etcd
 	$(DOCKER_RUN) --privileged $(CALICO_BUILD) sh -c 'cd /go/src/$(PACKAGE_NAME) && ginkgo -r .'
 
 ## Etcd is used by the kubernetes
@@ -257,9 +131,9 @@ ut: local_build
 # arm64: 3.2.5-arm64
 # ppc64le: 3.2.5-ppc64le
 # s390x is not available
-COREOS_ETCD ?= quay.io/coreos/etcd:$(ETCD_VER)-$(ARCH)
+COREOS_ETCD ?= quay.io/coreos/etcd:$(ETCD_VERSION)-$(ARCH)
 ifeq ($(ARCH),amd64)
-COREOS_ETCD = quay.io/coreos/etcd:$(ETCD_VER)
+COREOS_ETCD = quay.io/coreos/etcd:$(ETCD_VERSION)
 endif
 run-etcd: stop-etcd
 	docker run --detach \
@@ -293,11 +167,11 @@ bin/kubectl:
 	chmod +x $@
 
 bin/bird:
-	curl -sSf -L --retry 5 https://github.com/projectcalico/bird/releases/download/$(BIRD_VER)/bird -o $@
+	curl -sSf -L --retry 5 https://github.com/projectcalico/bird/releases/download/$(BIRD_VERSION)/bird -o $@
 	chmod +x $@
 
 bin/bird6:
-	curl -sSf -L --retry 5 https://github.com/projectcalico/bird/releases/download/$(BIRD_VER)/bird6 -o $@
+	curl -sSf -L --retry 5 https://github.com/projectcalico/bird/releases/download/$(BIRD_VERSION)/bird6 -o $@
 	chmod +x $@
 
 bin/calico-node:
@@ -305,7 +179,7 @@ bin/calico-node:
 	chmod +x $@
 
 bin/etcdctl:
-	curl -sSf -L --retry 5  https://github.com/coreos/etcd/releases/download/$(ETCD_VER)/etcd-$(ETCD_VER)-linux-$(ARCH).tar.gz | tar -xz -C bin --strip-components=1 etcd-$(ETCD_VER)-linux-$(ARCH)/etcdctl
+	curl -sSf -L --retry 5  https://github.com/coreos/etcd/releases/download/$(ETCD_VERSION)/etcd-$(ETCD_VERSION)-linux-$(ARCH).tar.gz | tar -xz -C bin --strip-components=1 etcd-$(ETCD_VERSION)-linux-$(ARCH)/etcdctl
 
 bin/calicoctl:
 	-docker rm -f calico-ctl
@@ -333,16 +207,9 @@ bin/typha:
 	  touch $@
 	-docker rm -f confd-typha
 
-foss-checks:
-	$(DOCKER_RUN) -e FOSSA_API_KEY=$(FOSSA_API_KEY) $(CALICO_BUILD) /usr/local/bin/fossa
-
 ###############################################################################
 # CI
 ###############################################################################
-.PHONY: mod-download
-mod-download:
-	-$(DOCKER_RUN) $(CALICO_BUILD) go mod download
-
 .PHONY: ci
 ci: clean mod-download static-checks test
 
