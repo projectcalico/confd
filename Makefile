@@ -207,8 +207,8 @@ bin/typha:
 	  touch $@
 	-docker rm -f confd-typha
 
-fv:
-	@echo "No FVs available."
+fv st:
+	@echo "No FVs or STs available."
 
 ###############################################################################
 # CI
