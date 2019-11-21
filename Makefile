@@ -6,13 +6,14 @@ GO_BUILD_VER=v0.27
 ###############################################################################
 MAKE_BRANCH?=$(GO_BUILD_VER)
 MAKE_REPO?=https://raw.githubusercontent.com/projectcalico/go-build/$(MAKE_BRANCH)
+WGET?=/usr/bin/wget
 
 Makefile.common: Makefile.common.$(MAKE_BRANCH)
 	cp "$<" "$@"
-Makefile.common.$(MAKE_BRANCH):
+Makefile.common.$(MAKE_BRANCH): $(WGET)
 	# Clean up any files downloaded from other branches so they don't accumulate.
 	rm -f Makefile.common.*
-	wget -nv $(MAKE_REPO)/Makefile.common -O "$@"
+	$(WGET) -nv $(MAKE_REPO)/Makefile.common -O "$@"
 
 include Makefile.common
 
@@ -267,34 +268,3 @@ release-prereqs:
 ifndef VERSION
 	$(error VERSION is undefined - run using make release VERSION=vX.Y.Z)
 endif
-
-###############################################################################
-# Developer helper scripts (not used by build or test)
-###############################################################################
-help:
-	@echo "confd Makefile"
-	@echo
-	@echo "Dependencies: docker 1.12+; go 1.8+"
-	@echo
-	@echo "For any target, set ARCH=<target> to build for a given target."
-	@echo "For example, to build for arm64:"
-	@echo
-	@echo "  make build ARCH=arm64"
-	@echo
-	@echo "Builds:"
-	@echo
-	@echo "  make build	Build the binary."
-	@echo
-	@echo "Tests:"
-	@echo
-	@echo "  make test	Run all tests."
-	@echo "  make test-kdd	Run kdd tests."
-	@echo "  make test-etcd	Run etcd tests."
-	@echo
-	@echo "Maintenance:"
-	@echo "  make clean	Remove binary files and docker images."
-	@echo "-----------------------------------------"
-	@echo "ARCH (target):	$(ARCH)"
-	@echo "BUILDARCH (host):$(BUILDARCH)"
-	@echo "CALICO_BUILD:	$(CALICO_BUILD)"
-	@echo "-----------------------------------------"
