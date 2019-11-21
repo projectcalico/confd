@@ -19,8 +19,8 @@ filter calico_export_to_bgp_peers {
   reject;
 }
 
-{{$network_key := printf "/bgp/v1/host/%s/network_v4" (getenv "NODENAME")}}{{if exists $network_key}}{{$network := getv $network_key}}
 filter calico_kernel_programming {
+{{$network_key := printf "/bgp/v1/host/%s/network_v4" (getenv "NODENAME")}}{{if exists $network_key}}{{$network := getv $network_key}}
 {{- $reject_key := "/rejectcidrs"}}
 {{- if ls $reject_key}}
 
@@ -55,5 +55,5 @@ filter calico_kernel_programming {
   accept;                                  {{/* Destination is not in any ipPool, accept  */}}
 }
 {{else}}
-filter calico_kernel_programming { accept; }
 {{end}}{{/* End of 'exists $network_key' */}}
+filter calico_kernel_programming { accept; }
