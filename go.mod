@@ -11,15 +11,13 @@ require (
 	github.com/onsi/ginkgo v1.8.0
 	github.com/onsi/gomega v1.5.0
 	github.com/projectcalico/confd v3.2.0+incompatible // indirect
-	github.com/projectcalico/libcalico-go v0.0.0-20191119183141-c072e7a2fae4
-	github.com/projectcalico/typha v0.0.0-20191120041510-00ee52d13a55
-	github.com/samuel/go-zookeeper v0.0.0-20190801204459-3c104360edc8 // indirect
+	github.com/projectcalico/libcalico-go v1.7.2-0.20191122034129-d601846715fa
+	github.com/projectcalico/typha v0.7.3-0.20191122053612-73a67e6d6686
 	github.com/sirupsen/logrus v1.4.2
 	github.com/ugorji/go v1.1.7 // indirect
-	github.com/xordataexchange/crypt v0.0.2 // indirect
 	k8s.io/api v0.0.0-20190718183219-b59d8169aab5
 	k8s.io/apimachinery v0.0.0-20190612205821-1799e75a0719
-	k8s.io/client-go v12.0.0+incompatible
+	k8s.io/client-go v0.0.0-20190620085101-78d2af792bab
 )
 
 replace github.com/sirupsen/logrus => github.com/projectcalico/logrus v1.0.4-calico
