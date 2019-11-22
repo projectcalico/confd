@@ -2,7 +2,9 @@ PACKAGE_NAME=github.com/projectcalico/confd
 GO_BUILD_VER=v0.27
 
 ###############################################################################
-# Download and include Makefile.common before anything else
+# Download and include Makefile.common
+#   Additions to EXTRA_DOCKER_ARGS need to happen before the include since
+#   that variable is evaluated when we declare DOCKER_RUN and siblings.
 ###############################################################################
 MAKE_BRANCH?=$(GO_BUILD_VER)
 MAKE_REPO?=https://raw.githubusercontent.com/projectcalico/go-build/$(MAKE_BRANCH)
@@ -14,6 +16,19 @@ Makefile.common.$(MAKE_BRANCH): $(WGET)
 	# Clean up any files downloaded from other branches so they don't accumulate.
 	rm -f Makefile.common.*
 	$(WGET) -nv $(MAKE_REPO)/Makefile.common -O "$@"
+
+# Build mounts for running in "local build" mode. This allows an easy build using local development code,
+# assuming that there is a local checkout of libcalico in the same directory as this repo.
+ifdef LOCAL_BUILD
+PHONY: set-up-local-build
+LOCAL_BUILD_DEP:=set-up-local-build
+
+EXTRA_DOCKER_ARGS+=-v $(CURDIR)/../libcalico-go:/go/src/github.com/projectcalico/libcalico-go:rw \
+	-v $(CURDIR)/../typha:/go/src/github.com/projectcalico/typha:rw
+$(LOCAL_BUILD_DEP):
+	$(DOCKER_RUN) $(CALICO_BUILD) go mod edit -replace=github.com/projectcalico/libcalico-go=../libcalico-go \
+		-replace=github.com/projectcalico/typha=../typha
+endif
 
 include Makefile.common
 
@@ -32,21 +47,6 @@ LDFLAGS=-ldflags "-X $(PACKAGE_NAME)/pkg/buildinfo.GitVersion=$(GIT_DESCRIPTION)
 # All go files.
 SRC_FILES:=$(shell find . -name '*.go' -not -path "./vendor/*" )
 
-# Build mounts for running in "local build" mode. This allows an easy build using local development code,
-# assuming that there is a local checkout of libcalico and typha in the same directory as this repo.
-PHONY: local_build
-
-ifdef LOCAL_BUILD
-EXTRA_DOCKER_ARGS+=-v $(CURDIR)/../libcalico-go:/go/src/github.com/projectcalico/libcalico-go:rw
-EXTRA_DOCKER_ARGS+=-v $(CURDIR)/../typha:/go/src/github.com/projectcalico/typha:rw
-local_build:
-	$(DOCKER_RUN) $(CALICO_BUILD) go mod edit -replace=github.com/projectcalico/libcalico-go=../libcalico-go
-	$(DOCKER_RUN) $(CALICO_BUILD) go mod edit -replace=github.com/projectcalico/typha=../typha
-else
-local_build:
-	@echo "Building confd"
-endif
-
 .PHONY: clean
 clean:
 	rm -rf vendor
@@ -61,7 +61,7 @@ update-pins: update-typha-pin
 ###############################################################################
 # Building the binary
 ###############################################################################
-build: local_build bin/confd
+build: $(LOCAL_BUILD_DEP) bin/confd
 build-all: $(addprefix sub-build-,$(VALIDARCHES))
 sub-build-%:
 	$(MAKE) build ARCH=$*
@@ -88,6 +88,7 @@ UPDATE_EXPECTED_DATA?=false
 ## Run template tests against KDD
 test-kdd: bin/confd bin/kubectl bin/bird bin/bird6 bin/calico-node bin/calicoctl bin/typha run-k8s-apiserver
 	-git clean -fx etc/calico/confd
+	-mkdir tests/logs
 	docker run --rm --net=host \
 		-v $(CURDIR)/tests/:/tests/ \
 		-v $(CURDIR)/bin:/calico/bin/ \
@@ -120,6 +121,7 @@ test-kdd: bin/confd bin/kubectl bin/bird bin/bird6 bin/calico-node bin/calicoctl
 ## Run template tests against etcd
 test-etcd: bin/confd bin/etcdctl bin/bird bin/bird6 bin/calico-node bin/kubectl bin/calicoctl run-etcd run-k8s-apiserver
 	-git clean -fx etc/calico/confd
+	-mkdir tests/logs
 	docker run --rm --net=host \
 		-v $(CURDIR)/tests/:/tests/ \
 		-v $(CURDIR)/bin:/calico/bin/ \
@@ -134,7 +136,7 @@ test-etcd: bin/confd bin/etcdctl bin/bird bin/bird6 bin/calico-node bin/kubectl 
 
 .PHONY: ut
 ## Run the fast set of unit tests in a container.
-ut: local_build test-kdd test-etcd
+ut: $(LOCAL_BUILD_DEP) test-kdd test-etcd
 	$(DOCKER_RUN) --privileged $(CALICO_BUILD) sh -c 'cd /go/src/$(PACKAGE_NAME) && ginkgo -r .'
 
 ## Etcd is used by the kubernetes
