@@ -62,7 +62,7 @@ protocol direct {
 
 {{if eq "" ($node_ip)}}# IPv4 disabled on this node.
 {{else}}{{$node_as_key := printf "/host/%s/as_num" (getenv "NODENAME")}}
-# Template for all BGP clients
+# Template for global and node BGP peers
 template bgp bgp_template {
 {{- $as_key := or (and (exists $node_as_key) $node_as_key) "/global/as_num"}}
 {{- $node_as_num := getv $as_key}}
@@ -82,6 +82,11 @@ template bgp bgp_template {
   error wait time 5,30;
 }
 
+# Template for mesh BGP peers
+template bgp bgp_template_mesh from bgp_template {
+  export filter calico_export_to_bgp_mesh;  # Only want to export routes for mesh tunneling.
+}
+
 # ------------- Node-to-node mesh -------------
 {{- $node_cid_key := printf "/host/%s/rr_cluster_id" (getenv "NODENAME")}}
 {{- $node_cluster_id := getv $node_cid_key}}
@@ -92,7 +97,7 @@ template bgp bgp_template {
 {{$nums := split $onode_ip "."}}{{$id := join $nums "_"}}
 # For peer {{$onode_ip_key}}
 {{if eq $onode_ip ($node_ip) }}# Skipping ourselves ({{$node_ip}})
-{{else if ne "" $onode_ip}}protocol bgp Mesh_{{$id}} from bgp_template {
+{{else if ne "" $onode_ip}}protocol bgp Mesh_{{$id}} from bgp_template_mesh {
   neighbor {{$onode_ip}} as {{if exists $onode_as_key}}{{getv $onode_as_key}}{{else}}{{getv "/global/as_num"}}{{end}};
   {{- /*
        Make the peering unidirectional. This avoids a race where
@@ -101,7 +106,7 @@ template bgp bgp_template {
        - peer A sees the new connection and aborts the graceful restart, causing a route flap.
   */ -}}
   {{if gt $onode_ip $node_ip}}
-  passive on; # Mesh is unidirectional, peer will connect to us. 
+  passive on; # Mesh is unidirectional, peer will connect to us.
   {{- end}}
 }{{end}}{{end}}{{end}}
 {{else}}

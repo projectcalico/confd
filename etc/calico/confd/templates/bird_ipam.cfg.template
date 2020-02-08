@@ -19,6 +19,26 @@ filter calico_export_to_bgp_peers {
   reject;
 }
 
+filter calico_export_to_bgp_mesh {
+  calico_aggr();
+{{- $static_key := "/staticroutes"}}
+{{- if ls $static_key}}
+
+  # Export static routes.
+  {{- range ls $static_key}}
+    {{- $parts := split . "-"}}
+    {{- $cidr := join $parts "/"}}
+  if ( net ~ {{$cidr}} ) then { accept; }
+  {{- end}}
+{{- end}}
+{{range ls "/v1/ipam/v4/pool"}}{{$data := json (getv (printf "/v1/ipam/v4/pool/%s" .))}}
+  if ( net ~ {{$data.cidr}} ) then {
+    accept;
+  }
+{{- end}}
+  reject;
+}
+
 {{$network_key := printf "/bgp/v1/host/%s/network_v4" (getenv "NODENAME")}}
 filter calico_kernel_programming {
 {{- $reject_key := "/rejectcidrs"}}
