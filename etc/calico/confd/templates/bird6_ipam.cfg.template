@@ -19,7 +19,18 @@ filter calico_export_to_bgp_peers {
   reject;
 }
 
+{{$network_key := printf "/bgp/v1/host/%s/network_v6" (getenv "NODENAME")}}
+function calico_local_only() {
+{{- if exists $network_key}}{{$network := getv $network_key}}
+{{- range ls "/v1/ipam/v6/pool"}}{{$data := json (getv (printf "/v1/ipam/v6/pool/%s" .))}}
+{{- if or ((not $data.ipip_mode) $data.vxlan_mode) }}
+  if ( net ~ {{$data.cidr}} ) then { reject; } {{ end}}
+{{- end}}
+{{- end}}{{/* End of 'exists $network_key' */}}
+}
+
 filter calico_export_to_bgp_mesh {
+  calico_local_only();
   calico_aggr();
 {{- $static_key := "/staticroutesv6"}}
 {{- if ls $static_key}}
