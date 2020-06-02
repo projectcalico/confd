@@ -13,6 +13,11 @@ router id {{if eq "hash" ($router_id) -}}
 	{{if ne "" ($router_id)}}{{$router_id}}{{else}}{{$node_ip}}{{end}};
 {{- end}}
 
+{{- $bgp_port := getenv "BGP_PORT" ""}}
+{{- if ne "" ($bgp_port)}}
+listen bgp port {{$bgp_port}};
+{{- end}}
+
 {{- define "LOGGING"}}
 {{- $node_logging_key := printf "/host/%s/loglevel" (getenv "NODENAME")}}
 {{- if exists $node_logging_key}}
@@ -77,6 +82,9 @@ template bgp bgp_template {
 {{- template "LOGGING"}}
   description "Connection to BGP peer";
   local as {{$node_as_num}};
+{{- if ne "" ($bgp_port)}}
+  neighbor port {{$bgp_port}};
+{{- end}}
   multihop;
   gateway recursive; # This should be the default, but just in case.
   import all;        # Import all routes, since we don't know what the upstream
