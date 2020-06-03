@@ -41,6 +41,7 @@ protocol kernel {
   learn;             # Learn all alien routes from the kernel
   persist;           # Don't remove routes on bird shutdown
   scan time 2;       # Scan kernel routing table every 2 seconds
+  merge paths yes;   # Install ECMP routes
   import all;
   export filter calico_kernel_programming; # Default is export none
   graceful restart;  # Turn on graceful restart to reduce potential flaps in
