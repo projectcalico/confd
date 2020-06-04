@@ -8,6 +8,7 @@ include "bird_ipam.cfg";
 {{- $node_name := getenv "NODENAME"}}
 
 {{- $skip_source_address := getenv "CALICO_SKIP_SOURCE_ADDRESS"}}
+{{- $support_ecmp := getenv "CALICO_SUPPORT_ECMP"}}
 
 router id {{if eq "hash" ($router_id) -}}
 	{{hashToIPv4 $node_name}};
@@ -41,7 +42,9 @@ protocol kernel {
   learn;             # Learn all alien routes from the kernel
   persist;           # Don't remove routes on bird shutdown
   scan time 2;       # Scan kernel routing table every 2 seconds
+  {{- if ne $support_ecmp ""}}
   merge paths yes;   # Install ECMP routes
+  {{- end}}
   import all;
   export filter calico_kernel_programming; # Default is export none
   graceful restart;  # Turn on graceful restart to reduce potential flaps in
