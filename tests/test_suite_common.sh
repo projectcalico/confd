@@ -271,6 +271,7 @@ execute_tests_daemon() {
         run_individual_test 'explicit_peering/selectors'
         run_individual_test 'explicit_peering/route_reflector'
         run_individual_test 'explicit_peering/keepnexthop'
+        run_individual_test 'explicit_peering/keepnexthop-global'
     done
 
     # Turn the node-mesh back on.
@@ -303,6 +304,7 @@ execute_tests_oneshot() {
         run_individual_test_oneshot 'mesh/static-routes'
         run_individual_test_oneshot 'mesh/communities'
         run_individual_test_oneshot 'explicit_peering/keepnexthop'
+        run_individual_test_oneshot 'explicit_peering/keepnexthop-global'
         export CALICO_ROUTER_ID=10.10.10.10
         run_individual_test_oneshot 'mesh/static-routes-no-ipv4-address'
         export -n CALICO_ROUTER_ID
@@ -483,10 +485,10 @@ compare_templates() {
         fi
         expected=/tests/compiled_templates/${testdir}/${f}
         actual=/etc/calico/confd/config/${f}
-        
+
         # Order of line in templates is not guaranteed for communities test, so sort and compare
         if [[ $(diff --ignore-blank-lines -q ${expected} ${actual}) != "" ]] \
-          && [[ "${testdir}" != *"mesh/communities"* || $(diff <(sort ${expected}) <(sort ${actual})) != "" ]] ; then       
+          && [[ "${testdir}" != *"mesh/communities"* || $(diff <(sort ${expected}) <(sort ${actual})) != "" ]] ; then
             if ! $record; then
                 rc=1;
             fi
