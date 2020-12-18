@@ -345,7 +345,6 @@ func (c *client) ExcludeServiceAdvertisement() bool {
 	excludeLabel := "node.kubernetes.io/exclude-from-external-load-balancers"
 
 	labels, ok := c.nodeLabels[template.NodeName]
-	log.Infof("CASEY: %t: %s", ok, labels)
 	if ok && labels[excludeLabel] == "true" {
 		return true
 	}
@@ -923,14 +922,14 @@ func (c *client) onUpdates(updates []api.Update, needUpdatePeersV1 bool) {
 		// to the route generator.  An empty string indicates a withdrawal of that set of
 		// service IPs.
 		var externalIPs []string
-		if !c.ExcludeServiceAdvertisement() && len(c.cache["/calico/bgp/v1/global/svc_external_ips"]) > 0 {
+		if len(c.cache["/calico/bgp/v1/global/svc_external_ips"]) > 0 {
 			externalIPs = strings.Split(c.cache["/calico/bgp/v1/global/svc_external_ips"], ",")
 		}
 		c.onExternalIPsUpdate(externalIPs)
 
 		// Same for cluster CIDRs.
 		var clusterIPs []string
-		if !c.ExcludeServiceAdvertisement() && len(c.cache["/calico/bgp/v1/global/svc_cluster_ips"]) > 0 {
+		if len(c.cache["/calico/bgp/v1/global/svc_cluster_ips"]) > 0 {
 			clusterIPs = strings.Split(c.cache["/calico/bgp/v1/global/svc_cluster_ips"], ",")
 		}
 		c.onClusterIPsUpdate(clusterIPs)
@@ -1228,11 +1227,22 @@ func (c *client) updateGlobalRoutes(current, new []string) error {
 		}
 	}
 
-	// Withdraw the old CIDRs and add the new.
-	c.addRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, new)
-	c.addRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, new)
-	c.deleteRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, withdraws)
-	c.deleteRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, withdraws)
+	if !c.ExcludeServiceAdvertisement() {
+		// Withdraw the old CIDRs and add the new.
+		log.Info("Advertise global service ranges from this node")
+		c.addRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, new)
+		c.addRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, new)
+		c.deleteRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, withdraws)
+		c.deleteRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, withdraws)
+	} else {
+		// If this node is excluded from service advertisement, we should not advertise any
+		// routes. However, we should still program reject rules for the CIDR range so we do not
+		// program any learned routes into the data plane.
+		log.Info("Do not advertise global service ranges from this node")
+		c.deleteRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, current)
+		c.deleteRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, current)
+		c.addRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, new)
+	}
 
 	return nil
 }

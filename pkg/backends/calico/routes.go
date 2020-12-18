@@ -350,7 +350,7 @@ func (rg *routeGenerator) advertiseThisService(svc *v1.Service, ep *v1.Endpoints
 
 	// Don't advertise routes if this node is explicitly excluded from load balancers.
 	if rg.client.ExcludeServiceAdvertisement() {
-		logc.Debugf("Skipping service because node is explicitly excluded from load balancers %s", svc.Spec.Type)
+		logc.Debug("Skipping service because node is explicitly excluded from load balancers")
 		return false
 	}
 
@@ -362,7 +362,7 @@ func (rg *routeGenerator) advertiseThisService(svc *v1.Service, ep *v1.Endpoints
 
 	// also do nothing if the clusterIP is empty or None
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
-		logc.Debugf("Skipping service with no cluster IP %s", svc.Spec.Type)
+		logc.Debug("Skipping service with no cluster IP")
 		return false
 	}
 
