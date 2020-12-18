@@ -338,6 +338,19 @@ func (c *client) onStatusUpdated(status api.SyncStatus) {
 	}
 }
 
+// ExcludeServiceAdvertisement returns true if this node should be excluded from
+// service advertisement based on node labels, and false if it is OK to advertise
+// services from this node.
+func (c *client) ExcludeServiceAdvertisement() bool {
+	excludeLabel := "node.kubernetes.io/exclude-from-external-load-balancers"
+
+	labels, ok := c.nodeLabels[template.NodeName]
+	if ok && labels[excludeLabel] == "true" {
+		return true
+	}
+	return false
+}
+
 // OnInSync handles multiplexing in-sync messages from multiple data sources
 // into a single representation of readiness.
 func (c *client) OnSyncChange(source string, ready bool) {
@@ -842,6 +855,14 @@ func (c *client) onUpdates(updates []api.Update, needUpdatePeersV1 bool) {
 					c.nodeLabels[v3key.Name] = v3res.Labels
 					needUpdatePeersV1 = true
 					needUpdatePeersReasons = append(needUpdatePeersReasons, v3key.Name+" updated")
+
+					if v3key.Name == template.NodeName && c.rg != nil {
+						// If it was our own labels that changed, and service advertisement is enabled,
+						// then we need to resync service advertisements as well, since a change in labels
+						// may trigger whether this node is a valid service advertisement target.
+						needServiceAdvertisementUpdates = true
+					}
+
 				}
 			}
 		}

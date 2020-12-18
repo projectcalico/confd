@@ -348,6 +348,12 @@ func contains(items []string, target string) bool {
 func (rg *routeGenerator) advertiseThisService(svc *v1.Service, ep *v1.Endpoints) bool {
 	logc := log.WithField("svc", fmt.Sprintf("%s/%s", svc.Namespace, svc.Name))
 
+	// Don't advertise routes if this node is explicitly excluded from load balancers.
+	if rg.client.ExcludeServiceAdvertisement() {
+		logc.Debugf("Skipping service because node is explicitly excluded from load balancers %s", svc.Spec.Type)
+		return false
+	}
+
 	// do nothing if the svc is not a relevant type
 	if (svc.Spec.Type != v1.ServiceTypeClusterIP) && (svc.Spec.Type != v1.ServiceTypeNodePort) && (svc.Spec.Type != v1.ServiceTypeLoadBalancer) {
 		logc.Debugf("Skipping service with type %s", svc.Spec.Type)
