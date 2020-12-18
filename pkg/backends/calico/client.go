@@ -1224,25 +1224,21 @@ func (c *client) updateGlobalRoutes(current, new []string) error {
 	withdraws := []string{}
 	for _, existing := range current {
 		if !contains(new, existing) {
-			// Either this route is not in the new set, or we have disabled
-			// service advertisement for this node explicitly and so existing
-			// routes should be withdrawn.
 			withdraws = append(withdraws, existing)
 		}
 	}
 
-	// Withdraw the old CIDRs and add the new.
-	//
-	// If this node is excluded from service advertisement, we should not advertise any
-	// routes. However, we should still program reject rules for the CIDR range so we do not
-	// program any learned routes into the data plane.
 	if !c.ExcludeServiceAdvertisement() {
+		// Withdraw the old CIDRs and add the new.
 		log.Info("Advertise global service ranges from this node")
 		c.addRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, new)
 		c.addRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, new)
 		c.deleteRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, withdraws)
 		c.deleteRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, withdraws)
 	} else {
+		// If this node is excluded from service advertisement, we should not advertise any
+		// routes. However, we should still program reject rules for the CIDR range so we do not
+		// program any learned routes into the data plane.
 		log.Info("Do not advertise global service ranges from this node")
 		c.deleteRoutesLockHeld(rejectKeyPrefix, rejectKeyPrefixV6, current)
 		c.deleteRoutesLockHeld(routeKeyPrefix, routeKeyPrefixV6, current)
