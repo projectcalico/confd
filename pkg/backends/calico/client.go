@@ -345,6 +345,7 @@ func (c *client) ExcludeServiceAdvertisement() bool {
 	excludeLabel := "node.kubernetes.io/exclude-from-external-load-balancers"
 
 	labels, ok := c.nodeLabels[template.NodeName]
+	log.Infof("CASEY: %t: %s", ok, labels)
 	if ok && labels[excludeLabel] == "true" {
 		return true
 	}
@@ -922,14 +923,14 @@ func (c *client) onUpdates(updates []api.Update, needUpdatePeersV1 bool) {
 		// to the route generator.  An empty string indicates a withdrawal of that set of
 		// service IPs.
 		var externalIPs []string
-		if len(c.cache["/calico/bgp/v1/global/svc_external_ips"]) > 0 {
+		if !c.ExcludeServiceAdvertisement() && len(c.cache["/calico/bgp/v1/global/svc_external_ips"]) > 0 {
 			externalIPs = strings.Split(c.cache["/calico/bgp/v1/global/svc_external_ips"], ",")
 		}
 		c.onExternalIPsUpdate(externalIPs)
 
 		// Same for cluster CIDRs.
 		var clusterIPs []string
-		if len(c.cache["/calico/bgp/v1/global/svc_cluster_ips"]) > 0 {
+		if !c.ExcludeServiceAdvertisement() && len(c.cache["/calico/bgp/v1/global/svc_cluster_ips"]) > 0 {
 			clusterIPs = strings.Split(c.cache["/calico/bgp/v1/global/svc_cluster_ips"], ",")
 		}
 		c.onClusterIPsUpdate(clusterIPs)
