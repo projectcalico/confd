@@ -8,7 +8,7 @@ require (
 	github.com/onsi/ginkgo v1.14.1
 	github.com/onsi/gomega v1.10.1
 	github.com/projectcalico/libcalico-go v1.7.2-0.20201221182549-d7d362e13e0a
-	github.com/projectcalico/typha v0.7.3-0.20201221184251-663591f0e46c
+	github.com/projectcalico/typha v0.7.3-0.20210211113541-2215c7e2b959
 	github.com/sirupsen/logrus v1.4.2
 	k8s.io/api v0.17.2
 	k8s.io/apimachinery v0.17.2
