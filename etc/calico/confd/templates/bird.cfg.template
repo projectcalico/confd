@@ -109,6 +109,22 @@ protocol direct {
 
 {{if eq "" ($node_ip)}}# IPv4 disabled on this node.
 {{else}}{{$node_as_key := printf "/host/%s/as_num" (getenv "NODENAME")}}
+
+# Enable BFD protocol conditionally
+{{- $bfd := getenv "ENABLE_BFD" "false" }}
+{{- if eq $bfd "true" }}
+protocol bfd {
+    interface -"cali*", -"kube-ipvs*", "*" {
+        interval 300 ms;
+        multiplier 3;
+    };
+    multihop {
+        interval 300 ms;
+        multiplier 3;
+    };
+}
+{{- end }}
+
 # Template for all BGP clients
 template bgp bgp_template {
 {{- $as_key := or (and (exists $node_as_key) $node_as_key) "/global/as_num"}}
@@ -126,7 +142,11 @@ template bgp bgp_template {
   connect delay time 2;
   connect retry time 5;
   error wait time 5,30;
+  {{- if eq $bfd "true" }}
+  bfd yes;
+  {{- end }}
 }
+
 
 # ------------- Node-to-node mesh -------------
 {{- $node_cid_key := printf "/host/%s/rr_cluster_id" (getenv "NODENAME")}}
