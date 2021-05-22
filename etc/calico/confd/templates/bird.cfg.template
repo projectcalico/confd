@@ -106,7 +106,6 @@ protocol direct {
        for it's networking so when deploying Calico side-by-side an OpenStack
        cloud then there will be a lot of those interfaces.
   */ -}}
-  # 
 }
 
 {{if eq "" ($node_ip)}}# IPv4 disabled on this node.
