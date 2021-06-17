@@ -103,7 +103,7 @@ protocol direct {
        kube-ipvs0 because this interface gets an address for every in use
        cluster IP. We use static routes for when we legitimately want to
        export cluster IPs.  In addition, OpenStack nodes use tap*/qvo*/qvb*
-       for it's networking so when deploying Calico side-by-side an OpenStack
+       for its networking so when deploying Calico side-by-side an OpenStack
        cloud then there will be a lot of those interfaces.
   */ -}}
 }
